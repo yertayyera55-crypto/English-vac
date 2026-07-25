@@ -4,6 +4,6 @@
  * Never put a service_role key in this file or in browser code.
  */
 window.LEXORA_SUPABASE_CONFIG = {
-  url: "",
-  anonKey: "",
+  url: "https://qntbukhaquptiqrbaxyw.supabase.co",
+  anonKey: "sb_publishable_PWhT4aC_uM-ZUppeoGRkTQ_2GuMA7PL",
 };
