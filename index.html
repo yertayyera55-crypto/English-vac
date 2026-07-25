@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#081121" />
+    <title>Lexora — SAT & IELTS vocabulary</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Main navigation">
+        <a class="brand" href="#dashboard" aria-label="Lexora home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>lexora</span>
+        </a>
+
+        <nav class="main-nav">
+          <a class="nav-link active" href="#dashboard" data-view="dashboard"><span>⌂</span> Dashboard</a>
+          <a class="nav-link" href="#word-bank" data-view="word-bank"><span>⌘</span> Word bank</a>
+          <a class="nav-link" href="#review" data-action="review"><span>↻</span> Review queue <b id="nav-due">18</b></a>
+          <a class="nav-link" href="#test" data-action="test"><span>✦</span> Test lab</a>
+        </nav>
+
+        <section class="sidebar-collections" aria-labelledby="collection-list-title">
+          <div class="sidebar-label"><span id="collection-list-title">Collections</span><button class="icon-button tiny" data-action="new-collection" aria-label="Add collection">+</button></div>
+          <div id="collection-nav" class="collection-nav"></div>
+        </section>
+
+        <div class="sidebar-footer">
+          <button class="profile-button" data-action="profile">
+            <span class="avatar">AI</span>
+            <span><strong>Aidar</strong><small>Personal workspace</small></span>
+            <span class="more">•••</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-content" id="dashboard">
+        <header class="topbar">
+          <button class="mobile-menu icon-button" data-action="menu" aria-label="Open navigation">☰</button>
+          <div class="crumb"><span>July 25</span><strong>Friday</strong></div>
+          <div class="topbar-actions">
+            <button class="quiet-button" data-action="focus"><span class="focus-dot"></span> Focus mode</button>
+            <button class="icon-button notification" aria-label="Notifications">♧<em></em></button>
+          </div>
+        </header>
+
+        <section class="welcome-row" aria-labelledby="page-title">
+          <div>
+            <p class="eyebrow">YOUR VOCABULARY WORKSPACE</p>
+            <h1 id="page-title">Make every word <em>useful.</em></h1>
+            <p class="lede">Learn meaning, nuance, and real-world use — one deliberate session at a time.</p>
+          </div>
+          <div class="streak-chip" aria-label="Current learning streak">
+            <span class="streak-flame">✦</span><span><b id="streak-value">7</b> day streak</span>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Vocabulary statistics">
+          <article class="metric"><span class="metric-icon sky">⌘</span><div><span>Total words</span><strong id="total-words">0</strong></div><small>across your library</small></article>
+          <article class="metric"><span class="metric-icon violet">↻</span><div><span>Due today</span><strong id="due-words">0</strong></div><small class="attention">4 are difficult</small></article>
+          <article class="metric"><span class="metric-icon mint">✓</span><div><span>Mastered</span><strong id="mastered-words">0</strong></div><small>+3 this week</small></article>
+          <article class="metric accuracy"><span class="metric-icon gold">↗</span><div><span>Recent accuracy</span><strong id="accuracy-value">82%</strong></div><div class="micro-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></article>
+        </section>
+
+        <div class="workspace-grid">
+          <section class="word-bank surface" id="word-bank" aria-labelledby="word-bank-title">
+            <div class="surface-heading">
+              <div>
+                <p class="eyebrow">YOUR LIBRARY</p>
+                <h2 id="word-bank-title">Word bank <span id="word-bank-count">0 words</span></h2>
+              </div>
+              <button class="add-word" data-action="add-word"><span>+</span> Add word</button>
+            </div>
+
+            <div class="filter-tabs" role="tablist" aria-label="Word status">
+              <button class="filter-tab active" data-status="all" role="tab">All</button>
+              <button class="filter-tab" data-status="new" role="tab">New</button>
+              <button class="filter-tab" data-status="learning" role="tab">Learning</button>
+              <button class="filter-tab" data-status="reviewing" role="tab">Reviewing</button>
+              <button class="filter-tab" data-status="mastered" role="tab">Mastered</button>
+            </div>
+
+            <div class="word-tools">
+              <label class="search-field"><span>⌕</span><input id="word-search" type="search" placeholder="Search words, meanings, tags…" autocomplete="off" /></label>
+              <label class="select-field"><span class="visually-hidden">Filter collection</span><select id="collection-filter"></select></label>
+              <button class="star-filter" data-action="star-filter" aria-pressed="false"><span>☆</span> Starred</button>
+            </div>
+
+            <div class="word-list-header"><span>WORD</span><span>STATUS</span><span>MASTERY</span></div>
+            <div id="word-list" class="word-list" aria-live="polite"></div>
+            <button class="show-more" data-action="show-more">Show all words <span>→</span></button>
+          </section>
+
+          <aside class="right-rail" aria-label="Study actions and activity">
+            <section class="action-stack" aria-label="Study actions">
+              <button class="primary-action daily-action" data-action="start"><span class="action-icon">▶</span><span><small>12 min · 9 words</small>Start daily session</span><b>→</b></button>
+              <button class="primary-action review-action" data-action="review"><span class="action-icon">↻</span><span><small>18 words waiting</small>Review queue</span><b>→</b></button>
+              <button class="primary-action test-action" data-action="test"><span class="action-icon">✦</span><span><small>Choose your format</small>Vocab test</span><b>→</b></button>
+            </section>
+
+            <section class="surface progress-surface" aria-labelledby="progress-title">
+              <div class="surface-heading compact"><div><p class="eyebrow">SELECTED COLLECTION</p><h2 id="progress-title">SAT Vocab #1</h2></div><button class="more-button" aria-label="Collection options">•••</button></div>
+              <div class="progress-main">
+                <div class="ring" role="img" aria-label="62 percent complete"><span><strong id="collection-progress">62%</strong><small>ready</small></span></div>
+                <div class="progress-copy"><strong id="collection-mastered">46 / 74</strong><span>words mastered</span><p>Next milestone: 50 words</p></div>
+              </div>
+              <div class="level-track"><span>New <b id="new-count">8</b></span><i class="new-bar"></i><span>Learning <b id="learning-count">14</b></span><i class="learning-bar"></i><span>Review <b id="review-count">6</b></span><i class="review-bar"></i></div>
+            </section>
+
+            <section class="surface activity-surface" aria-labelledby="activity-title">
+              <div class="surface-heading compact"><div><p class="eyebrow">CONSISTENCY</p><h2 id="activity-title">July activity</h2></div><span class="activity-total">16 sessions</span></div>
+              <div class="calendar-head"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+              <div id="calendar" class="calendar" aria-label="Learning activity calendar"></div>
+              <div class="calendar-legend"><span><i></i> less</span><span><i></i><i></i><i></i><i></i> more</span></div>
+            </section>
+          </aside>
+        </div>
+
+        <section class="how-it-works" aria-label="Learning journey">
+          <div><p class="eyebrow">THE LEXORA METHOD</p><h2>From recognition<br />to real use.</h2></div>
+          <ol class="journey">
+            <li><span>01</span><strong>Learn</strong><small>meaning & sound</small></li>
+            <li><span>02</span><strong>Recognise</strong><small>in a new sentence</small></li>
+            <li><span>03</span><strong>Understand</strong><small>the situation</small></li>
+            <li><span>04</span><strong>Recall</strong><small>without cues</small></li>
+            <li><span>05</span><strong>Use</strong><small>make it yours</small></li>
+          </ol>
+        </section>
+      </main>
+    </div>
+
+    <div id="overlay-root"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
