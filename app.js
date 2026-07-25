@@ -16,17 +16,137 @@ const wordSeed = [
   { w: "nuance", p: "/ˈnjuːɑːns/", pos: "noun", d: "a subtle difference in meaning, expression, or tone", tr: "оттенок значения", e: "The translator captured the nuance of the speaker's hesitation.", r: ["subtlety", "shade", "distinction"], c: ["sat2", "reading"], s: "learning", m: 46, rec: ["The actor changed the nuance of the line by pausing before the final word.", "What does nuance most likely mean here?", ["A small shade of meaning", "The main plot", "A factual error", "A loud sound"]], ctx: ["Both proposals support public transport, but one focuses on fares and the other late-night service.", "What is the nuance between them?", ["They prioritize different benefits", "They have no goal in common", "One rejects transport", "They are identical"]], fill: ["Knowing the cultural _____ helped her avoid an unintended insult.", ["nuance", "scarcity", "convention", "resilience"]] },
 ];
 
-const app = { collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false, streak: 7, accuracy: 82 };
+const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), streak: 7, accuracy: 82 });
+const app = { ...freshWorkspace(), activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false };
 const root = document.querySelector("#overlay-root"), toast = document.querySelector("#toast");
+const storageKey = "lexora-state";
+const cloud = { enabled: false, client: null, user: null, state: "local", syncTimer: null, isLoading: false, needsWorkspaceChoice: false };
 let session, test, toastTimer;
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[x]);
 const coll = (id) => app.collections.find((x) => x.id === id);
 const collectionWords = (id = app.activeCollection) => id === "all" ? app.words : app.words.filter((w) => w.c.includes(id));
 const due = (w) => w.due || w.s === "reviewing";
 const statusColor = (s) => ({ new: "#638dff", learning: "#a66bef", reviewing: "#eebc63", mastered: "#58ca89" })[s];
-function save() { try { localStorage.setItem("lexora-state", JSON.stringify({ words: app.words, collections: app.collections, streak: app.streak, accuracy: app.accuracy })); } catch {} }
-function load() { try { const x = JSON.parse(localStorage.getItem("lexora-state")); if (x?.words?.length) Object.assign(app, x); } catch {} }
+function workspaceState() { return { words: app.words, collections: app.collections, streak: app.streak, accuracy: app.accuracy }; }
+function applyWorkspace(state) {
+  if (!state || !Array.isArray(state.words) || !Array.isArray(state.collections)) return false;
+  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
+  return true;
+}
+function resetWorkspace() { applyWorkspace(freshWorkspace()); }
+function saveLocal() { try { localStorage.setItem(storageKey, JSON.stringify(workspaceState())); } catch {} }
+function load() { try { applyWorkspace(JSON.parse(localStorage.getItem(storageKey))); } catch {} }
+function save() { saveLocal(); if (cloud.enabled && cloud.user && !cloud.isLoading) queueCloudSave(); }
 function notice(s) { toast.textContent = s; toast.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 2700); }
+
+function initials(name = "") { return name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "LX"; }
+function cloudReady() { const config = window.LEXORA_SUPABASE_CONFIG || {}; return Boolean(config.url && config.anonKey && window.supabase?.createClient); }
+function renderAccount() {
+  const name = cloud.user?.user_metadata?.full_name || cloud.user?.email?.split("@")[0] || "Aidar";
+  document.querySelector("#profile-avatar").textContent = initials(name);
+  document.querySelector("#profile-name").textContent = name;
+  document.querySelector("#profile-subtitle").textContent = cloud.user ? "Private cloud workspace" : "Personal workspace";
+  const status = document.querySelector("#sync-status");
+  const label = cloud.user ? (cloud.state === "saving" ? "Saving…" : cloud.state === "error" ? "Saved in browser" : "Cloud saved") : "Browser only";
+  status.dataset.state = cloud.user ? cloud.state : "local";
+  status.querySelector("span").textContent = label;
+}
+function configureCloud() {
+  if (!cloudReady()) return false;
+  const config = window.LEXORA_SUPABASE_CONFIG;
+  cloud.client = window.supabase.createClient(config.url, config.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+  cloud.enabled = true;
+  cloud.client.auth.onAuthStateChange((event, sessionData) => {
+    if (event === "SIGNED_OUT") {
+      cloud.user = null; cloud.state = "local"; load(); render(); authView();
+    } else if (sessionData?.user && sessionData.user.id !== cloud.user?.id) {
+      window.setTimeout(() => useSession(sessionData), 0);
+    }
+  });
+  return true;
+}
+async function boot() {
+  load();
+  if (!configureCloud()) { render(); return; }
+  const { data, error } = await cloud.client.auth.getSession();
+  if (error) notice("Could not restore the cloud session. Please sign in again.");
+  if (data.session) await useSession(data.session); else authView();
+}
+async function useSession(sessionData) {
+  cloud.user = sessionData.user;
+  cloud.state = "saving";
+  cloud.isLoading = true;
+  renderAccount();
+  const { data, error } = await cloud.client.from("user_workspaces").select("state").eq("user_id", cloud.user.id).maybeSingle();
+  cloud.isLoading = false;
+  if (error) {
+    cloud.state = "error"; renderAccount(); notice("Cloud storage could not be opened. Your browser copy is still safe."); return;
+  }
+  if (data?.state) {
+    applyWorkspace(data.state);
+    cloud.state = "cloud";
+    cloud.needsWorkspaceChoice = false;
+    render(); close(); notice("Your private cloud workspace is ready."); return;
+  }
+  cloud.needsWorkspaceChoice = true;
+  render(); firstWorkspaceView();
+}
+async function createCloudWorkspace(migrateBrowserData) {
+  if (!cloud.user) return;
+  if (!migrateBrowserData) resetWorkspace();
+  cloud.needsWorkspaceChoice = false;
+  cloud.state = "saving"; render();
+  await pushCloud(true);
+  if (cloud.state === "cloud") { close(); notice(migrateBrowserData ? "Your browser library is now private and synced." : "A new private workspace is ready."); }
+}
+function queueCloudSave() {
+  clearTimeout(cloud.syncTimer);
+  cloud.state = "saving"; renderAccount();
+  cloud.syncTimer = setTimeout(() => pushCloud(false), 650);
+}
+async function pushCloud(showFeedback = false) {
+  if (!cloud.client || !cloud.user || cloud.isLoading) return;
+  cloud.state = "saving"; renderAccount();
+  const { error } = await cloud.client.from("user_workspaces").upsert({ user_id: cloud.user.id, state: workspaceState() }, { onConflict: "user_id" });
+  cloud.state = error ? "error" : "cloud";
+  renderAccount();
+  if (error && showFeedback) notice("Cloud save failed. Your browser copy remains available.");
+  if (!error && showFeedback) saveLocal();
+}
+function authView(mode = "signin") {
+  const signup = mode === "signup";
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal auth-modal"><div class="modal-intro"><div class="auth-wordmark"><i></i>LEXORA CLOUD</div><p class="eyebrow">PRIVATE VOCABULARY WORKSPACE</p><h2>${signup ? "Create your private workspace." : "Your words, on every device."}</h2><p>${signup ? "Create a separate account for yourself. Your friend will have a different account and will never see your words or progress." : "Sign in to open your own vocabulary library. Each account has an isolated database."}</p><label class="field-label">EMAIL</label><input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com"><label class="field-label">PASSWORD</label><input id="auth-password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" placeholder="At least 8 characters"><div class="auth-security-note"><b>●</b><span>Words, collections, and progress are stored under your account only. Keep the password private.</span></div><div class="modal-footer"><span class="subtle-note">${signup ? "You may need to confirm your email." : "New here? Create an account."}</span><button class="modal-cta" data-action="auth-submit" data-mode="${signup ? "signup" : "signin"}">${signup ? "Create account" : "Sign in"}</button></div><p class="auth-switch">${signup ? "Already have an account?" : "No account yet?"} <button data-action="auth-switch" data-mode="${signup ? "signin" : "signup"}">${signup ? "Sign in" : "Create one"}</button></p></div></section></div>`;
+  window.setTimeout(() => document.querySelector("#auth-email")?.focus(), 0);
+}
+function firstWorkspaceView() {
+  const count = app.words.length;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal auth-modal"><div class="modal-intro"><div class="auth-wordmark"><i></i>LEXORA CLOUD</div><p class="eyebrow">FIRST CLOUD SYNC</p><h2>Choose what belongs in this account.</h2><p>This account does not have a cloud library yet. Keep data private by choosing whether the ${count} words currently in this browser should move into this account.</p><div class="account-info"><div class="account-line"><span><b>Move this browser library</b><small>Words, collections, and progress will be saved to this account.</small></span><button class="modal-cta" data-action="cloud-workspace" data-mode="migrate">Use ${count} words</button></div><div class="account-line"><span><b>Start a separate library</b><small>Creates a fresh Lexora study set for this account.</small></span><button class="secondary-action" data-action="cloud-workspace" data-mode="fresh">Start fresh</button></div></div></div></section></div>`;
+}
+async function authenticate(mode) {
+  const email = document.querySelector("#auth-email")?.value.trim();
+  const password = document.querySelector("#auth-password")?.value;
+  if (!email || !password || password.length < 8) return notice("Enter an email and a password with at least 8 characters.");
+  const button = root.querySelector('[data-action="auth-submit"]'); if (button) { button.disabled = true; button.textContent = "Please wait…"; }
+  const request = mode === "signup" ? cloud.client.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` } }) : cloud.client.auth.signInWithPassword({ email, password });
+  const { data, error } = await request;
+  if (error) { if (button) { button.disabled = false; button.textContent = mode === "signup" ? "Create account" : "Sign in"; } return notice(error.message); }
+  if (mode === "signup" && !data.session) { notice("Check your email, confirm the account, then sign in."); return authView("signin"); }
+  if (data.session) await useSession(data.session);
+}
+async function signOut() { if (!cloud.client) return; await cloud.client.auth.signOut(); }
+function profileModal() {
+  if (!cloud.user) return cloud.enabled ? authView() : notice("Add Supabase project details in supabase-config.js to enable private cloud accounts.");
+  const email = esc(cloud.user.email || "");
+  const state = cloud.state === "error" ? "Browser backup only" : cloud.state === "saving" ? "Saving changes…" : "Cloud saved";
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal auth-modal"><button class="icon-button modal-close" data-action="close" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">ACCOUNT & BACKUP</p><h2>Your private workspace.</h2><p>Only the signed-in account can read or change this library. A browser backup is also kept on this device.</p><div class="account-info"><div class="account-line"><span><b>${email}</b><small>Signed-in Lexora account</small></span><span class="account-state ${cloud.state === "error" ? "warning" : ""}">${state}</span></div></div><div class="account-actions"><button class="secondary-action" data-action="sync-now">Sync now</button><button class="secondary-action" data-action="export-backup">Download backup</button><button class="secondary-action danger-outline" data-action="sign-out">Sign out</button></div></div></section></div>`;
+}
+function downloadBackup() {
+  const file = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), lexora: workspaceState() }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(file), link = document.createElement("a");
+  link.href = url; link.download = `lexora-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notice("Backup downloaded. Keep it somewhere safe.");
+}
 
 function renderCollections() {
   document.querySelector("#collection-nav").innerHTML = app.collections.map((c) => `<button data-action="collection" data-id="${c.id}" class="${app.activeCollection === c.id ? "active" : ""}" style="--collection-color:${c.color}"><i></i><span>${esc(c.name)}</span><b>${collectionWords(c.id).length}</b></button>`).join("");
@@ -93,9 +213,44 @@ function saveCollection() { const input=document.querySelector("#collection-name
 function wordModal(id) { const w=app.words.find((x)=>x.id===id), editing=!!w; root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">${editing?"WORD DETAILS":"ADD A WORD"}</p><h2>${editing?esc(w.w):"Build your library."}</h2><div class="config-grid"><label><span class="field-label">WORD</span><input id="editor-word" value="${esc(w?.w||"")}" placeholder="e.g. tenacious"></label><label><span class="field-label">PART OF SPEECH</span><select id="editor-pos">${["adjective","noun","verb","adverb"].map((x)=>`<option ${w?.pos===x?"selected":""}>${x}</option>`).join("")}</select></label></div><label><span class="field-label">SIMPLE DEFINITION</span><input id="editor-definition" value="${esc(w?.d||"")}" placeholder="What does it mean in plain English?"></label><label><span class="field-label">EXAMPLE SENTENCE</span><textarea class="use-textarea" id="editor-example" placeholder="Use it in a real situation…">${esc(w?.e||"")}</textarea></label><span class="field-label">IN COLLECTIONS</span><div class="check-grid">${app.collections.map((c)=>`<label class="check-item"><input type="checkbox" value="${c.id}" ${w?.c.includes(c.id)?"checked":""}> ${esc(c.name)}</label>`).join("")}</div><div class="modal-footer">${editing?`<button class="danger-button" data-action="delete" data-id="${w.id}">Remove word</button>`:`<span class="subtle-note">You can edit details later.</span>`}<button class="modal-cta" data-action="save-word" data-id="${w?.id||""}">${editing?"Save changes":"Add word"}</button></div></div></section></div>`; }
 function saveWord(id) { const w=document.querySelector("#editor-word").value.trim().toLowerCase(),d=document.querySelector("#editor-definition").value.trim(),e=document.querySelector("#editor-example").value.trim(),pos=document.querySelector("#editor-pos").value,c=[...document.querySelectorAll(".check-grid input:checked")].map(x=>x.value); if(!w||!d||!c.length)return notice("Add a word, its meaning, and at least one collection."); const data={w,d,e,pos,c}; if(id)Object.assign(app.words.find(x=>x.id===id),data);else app.words.unshift({id:`${w}-${Date.now()}`,...data,p:"/add pronunciation/",tr:"",r:[],s:"new",m:0,star:false,hard:false,due:true,rec:[e||`The word ${w} appeared in the article.`,`What does ${w} most likely mean?`,[d,"A familiar routine","A sudden change","A source of doubt"]],ctx:[e||`The writer used ${w} in a discussion.`,`What should a reader do next?`,["Use surrounding context","Ignore the word","Assume no effect","Choose randomly"]],fill:[`The writer chose the word _____.`,[w,"ordinary","unclear","limited"]]});save();render();close();notice(`“${w}” ${id?"was updated":"was added to your library"}.`); }
 
-document.addEventListener("click",(e)=>{const t=e.target.closest("[data-action]");if(!t)return;const a=t.dataset.action,id=t.dataset.id;if(a==="close")close();if(a==="start")startSession();if(a==="review")startSession("review");if(a==="test")testConfig();if(a==="collection"){app.activeCollection=id;app.showAll=false;render()}if(a==="star-filter"){app.starredOnly=!app.starredOnly;t.setAttribute("aria-pressed",app.starredOnly);renderWords()}if(a==="star"){const w=app.words.find(x=>x.id===id);w.star=!w.star;save();renderWords()}if(a==="clear"){app.activeStatus="all";app.starredOnly=false;app.query="";document.querySelector("#word-search").value="";document.querySelectorAll(".filter-tab").forEach(x=>x.classList.toggle("active",x.dataset.status==="all"));renderWords()}if(a==="show-more"){app.showAll=!app.showAll;renderWords()}if(a==="pick"){session.picked=+id;sessionView()}if(a==="submit")submit();if(a==="advance")advance();if(a==="test-collection"){test.collection=id;document.querySelectorAll("#test-collections .choice").forEach(x=>x.classList.toggle("selected",x===t))}if(a==="begin-test")beginTest();if(a==="test-answer"){test.selected=+id;testView()}if(a==="next-test")nextTest();if(a==="new-collection")collectionModal();if(a==="color"){document.querySelectorAll(".color-dot").forEach(x=>x.classList.toggle("selected",x===t))}if(a==="save-collection")saveCollection();if(a==="add-word")wordModal();if(a==="edit")wordModal(id);if(a==="save-word")saveWord(id);if(a==="delete"){const w=app.words.find(x=>x.id===id);app.words=app.words.filter(x=>x.id!==id);save();render();close();notice(`Removed “${w.w}”.`)}if(a==="profile")notice("This personal workspace is saved separately in this browser.");if(a==="focus"){document.body.classList.toggle("focus-mode");notice(document.body.classList.contains("focus-mode")?"Focus mode on — distractions dimmed.":"Focus mode off.")}if(a==="menu")document.querySelector(".sidebar").classList.toggle("open")});
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-action]"); if (!t) return;
+  const a = t.dataset.action, id = t.dataset.id;
+  if (a === "close") close();
+  if (a === "start") startSession();
+  if (a === "review") startSession("review");
+  if (a === "test") testConfig();
+  if (a === "collection") { app.activeCollection = id; app.showAll = false; render(); }
+  if (a === "star-filter") { app.starredOnly = !app.starredOnly; t.setAttribute("aria-pressed", app.starredOnly); renderWords(); }
+  if (a === "star") { const w = app.words.find((x) => x.id === id); w.star = !w.star; save(); renderWords(); }
+  if (a === "clear") { app.activeStatus = "all"; app.starredOnly = false; app.query = ""; document.querySelector("#word-search").value = ""; document.querySelectorAll(".filter-tab").forEach((x) => x.classList.toggle("active", x.dataset.status === "all")); renderWords(); }
+  if (a === "show-more") { app.showAll = !app.showAll; renderWords(); }
+  if (a === "pick") { session.picked = +id; sessionView(); }
+  if (a === "submit") submit();
+  if (a === "advance") advance();
+  if (a === "test-collection") { test.collection = id; document.querySelectorAll("#test-collections .choice").forEach((x) => x.classList.toggle("selected", x === t)); }
+  if (a === "begin-test") beginTest();
+  if (a === "test-answer") { test.selected = +id; testView(); }
+  if (a === "next-test") nextTest();
+  if (a === "new-collection") collectionModal();
+  if (a === "color") document.querySelectorAll(".color-dot").forEach((x) => x.classList.toggle("selected", x === t));
+  if (a === "save-collection") saveCollection();
+  if (a === "add-word") wordModal();
+  if (a === "edit") wordModal(id);
+  if (a === "save-word") saveWord(id);
+  if (a === "delete") { const w = app.words.find((x) => x.id === id); app.words = app.words.filter((x) => x.id !== id); save(); render(); close(); notice(`Removed “${w.w}”.`); }
+  if (a === "profile") profileModal();
+  if (a === "auth-switch") authView(t.dataset.mode);
+  if (a === "auth-submit") authenticate(t.dataset.mode);
+  if (a === "cloud-workspace") createCloudWorkspace(t.dataset.mode === "migrate");
+  if (a === "sync-now") pushCloud(true);
+  if (a === "export-backup") downloadBackup();
+  if (a === "sign-out") signOut();
+  if (a === "focus") { document.body.classList.toggle("focus-mode"); notice(document.body.classList.contains("focus-mode") ? "Focus mode on — distractions dimmed." : "Focus mode off."); }
+  if (a === "menu") document.querySelector(".sidebar").classList.toggle("open");
+});
 document.addEventListener("click",(e)=>{const t=e.target.closest(".filter-tab");if(!t)return;app.activeStatus=t.dataset.status;app.showAll=false;document.querySelectorAll(".filter-tab").forEach(x=>x.classList.toggle("active",x===t));renderWords()});
 document.querySelector("#word-search").addEventListener("input",(e)=>{app.query=e.target.value;app.showAll=false;renderWords()});
 document.querySelector("#collection-filter").addEventListener("change",(e)=>{app.activeCollection=e.target.value;app.showAll=false;render()});
 document.addEventListener("keydown",(e)=>{if(e.key==="Escape"&&root.innerHTML)close()});
-load();render();
+boot();

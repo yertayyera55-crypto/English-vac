@@ -32,8 +32,8 @@
 
         <div class="sidebar-footer">
           <button class="profile-button" data-action="profile">
-            <span class="avatar">AI</span>
-            <span><strong>Aidar</strong><small>Personal workspace</small></span>
+            <span class="avatar" id="profile-avatar">AI</span>
+            <span><strong id="profile-name">Aidar</strong><small id="profile-subtitle">Personal workspace</small></span>
             <span class="more">•••</span>
           </button>
         </div>
@@ -44,6 +44,7 @@
           <button class="mobile-menu icon-button" data-action="menu" aria-label="Open navigation">☰</button>
           <div class="crumb"><span>July 25</span><strong>Friday</strong></div>
           <div class="topbar-actions">
+            <button class="sync-pill" data-action="profile" id="sync-status" aria-label="Storage and account settings"><i></i><span>Browser only</span></button>
             <button class="quiet-button" data-action="focus"><span class="focus-dot"></span> Focus mode</button>
             <button class="icon-button notification" aria-label="Notifications">♧<em></em></button>
           </div>
@@ -140,6 +141,8 @@
     <div id="overlay-root"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
     <script src="app.js"></script>
     <script src="importer.js"></script>
   </body>
