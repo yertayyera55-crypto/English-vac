@@ -14,6 +14,8 @@ npm start
 
 Open [http://localhost:4173](http://localhost:4173).
 
+On macOS, you can instead double-click `Запустить Lexora.command` in Finder.
+
 ## Check the JavaScript
 
 ```bash
