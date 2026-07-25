@@ -74,7 +74,10 @@
                 <p class="eyebrow">YOUR LIBRARY</p>
                 <h2 id="word-bank-title">Word bank <span id="word-bank-count">0 words</span></h2>
               </div>
-              <button class="add-word" data-action="add-word"><span>+</span> Add word</button>
+              <div class="library-actions">
+                <button class="import-words" data-action="import-words"><span>⇧</span> Import file</button>
+                <button class="add-word" data-action="add-word"><span>+</span> Add word</button>
+              </div>
             </div>
 
             <div class="filter-tabs" role="tablist" aria-label="Word status">
@@ -136,6 +139,8 @@
 
     <div id="overlay-root"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="app.js"></script>
+    <script src="importer.js"></script>
   </body>
 </html>
