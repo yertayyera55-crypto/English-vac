@@ -255,6 +255,29 @@ function testResult() { const correct=test.qs.filter((q,i)=>q.correct===test.ans
 
 function collectionModal() { root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">NEW COLLECTION</p><h2>Give a set of words a home.</h2><p>Collections can overlap, so a word can appear in both SAT and IELTS study plans.</p><label class="field-label">COLLECTION NAME</label><input id="collection-name" placeholder="e.g. Words from October reading" maxlength="38" autofocus><label class="field-label">ACCENT</label><div class="color-choice"><button class="color-dot selected" data-action="color" data-id="#638dff" style="--dot:#638dff"></button><button class="color-dot" data-action="color" data-id="#a36af3" style="--dot:#a36af3"></button><button class="color-dot" data-action="color" data-id="#51c88a" style="--dot:#51c88a"></button><button class="color-dot" data-action="color" data-id="#e579aa" style="--dot:#e579aa"></button></div><div class="modal-footer"><span class="subtle-note">You can add words next.</span><button class="modal-cta" data-action="save-collection">Create collection</button></div></div></section></div>`; }
 function saveCollection() { const input=document.querySelector("#collection-name"),name=input.value.trim(); if(!name)return notice("Give the collection a name first."); const color=document.querySelector(".color-dot.selected")?.dataset.id||"#638dff",id=`collection-${Date.now()}`;app.collections.push({id,name,color});app.activeCollection=id;save();render();close();notice(`“${name}” is ready for words.`); }
+function practiceSelectionModal() {
+  const words = collectionWords(), scope = app.activeCollection === "all" ? "your whole library" : `“${coll(app.activeCollection)?.name || "this collection"}”`;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal practice-selection-modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">CHOOSE WORDS</p><h2>Build your practice set.</h2><p>Tick only the words you want in Review Queue and Vocab Test. Unticked words are treated as known, so cards are optional.</p><div class="practice-selection-summary"><span><b id="practice-selection-count">0</b> selected from ${words.length} in ${esc(scope)}</span><div><button class="selection-link" data-action="select-all-practice">Select all</button><button class="selection-link" data-action="clear-practice">Clear</button></div></div><div id="practice-selection-list" class="practice-selection-list">${words.map((word) => `<label class="practice-select-row"><input type="checkbox" value="${esc(word.id)}" ${needsPractice(word) ? "checked" : ""}><span class="practice-select-word"><b>${esc(word.w)}</b><small>${esc(word.pos)} · ${esc(word.d)}</small></span><span class="practice-select-state">${needsPractice(word) ? "practice" : "known"}</span></label>`).join("") || `<p class="empty-selection">This collection has no words yet.</p>`}</div><div class="modal-footer"><span class="subtle-note">Your selection is private and syncs with your account.</span><button class="modal-cta" data-action="save-practice-selection" ${words.length ? "" : "disabled"}>Save selection</button></div></div></section></div>`;
+  updatePracticeSelectionCount();
+}
+function updatePracticeSelectionCount() {
+  const checks = [...root.querySelectorAll("#practice-selection-list input[type=checkbox]")], selected = checks.filter((input) => input.checked).length;
+  const count = root.querySelector("#practice-selection-count"), button = root.querySelector('[data-action="save-practice-selection"]');
+  if (count) count.textContent = selected;
+  if (button) button.textContent = `Save ${selected} ${selected === 1 ? "word" : "words"}`;
+  checks.forEach((input) => input.closest(".practice-select-row")?.classList.toggle("selected", input.checked));
+}
+function setPracticeSelection(checked) { root.querySelectorAll("#practice-selection-list input[type=checkbox]").forEach((input) => { input.checked = checked; }); updatePracticeSelectionCount(); }
+function savePracticeSelection() {
+  const selected = new Set([...root.querySelectorAll("#practice-selection-list input:checked")].map((input) => input.value)), scope = new Set(collectionWords().map((word) => word.id));
+  app.words.forEach((word) => {
+    if (!scope.has(word.id)) return;
+    const shouldPractice = selected.has(word.id); word.needsPractice = shouldPractice; word.due = shouldPractice; word.hard = shouldPractice;
+    if (shouldPractice && word.s === "mastered") word.s = "reviewing";
+    if (!shouldPractice) { word.s = "mastered"; word.m = Math.max(85, word.m); }
+  });
+  save(); render(); close(); notice(`${selected.size} ${selected.size === 1 ? "word is" : "words are"} in your practice set.`);
+}
 function collectionOptions() {
   if (app.activeCollection === "all") return notice("Choose a collection first.");
   const collection = coll(app.activeCollection); if (!collection) return notice("That collection is no longer available.");
@@ -304,6 +327,10 @@ document.addEventListener("click", (e) => {
   if (a === "test-answer") { test.selected = +id; testView(); }
   if (a === "next-test") nextTest();
   if (a === "new-collection") collectionModal();
+  if (a === "choose-practice") practiceSelectionModal();
+  if (a === "select-all-practice") setPracticeSelection(true);
+  if (a === "clear-practice") setPracticeSelection(false);
+  if (a === "save-practice-selection") savePracticeSelection();
   if (a === "color") document.querySelectorAll(".color-dot").forEach((x) => x.classList.toggle("selected", x === t));
   if (a === "save-collection") saveCollection();
   if (a === "prepare-delete-collection") deleteCollectionModal(id);
@@ -324,6 +351,7 @@ document.addEventListener("click", (e) => {
   if (a === "menu") document.querySelector(".sidebar").classList.toggle("open");
 });
 document.addEventListener("click",(e)=>{const t=e.target.closest(".filter-tab");if(!t)return;app.activeStatus=t.dataset.status;app.showAll=false;document.querySelectorAll(".filter-tab").forEach(x=>x.classList.toggle("active",x===t));renderWords()});
+document.addEventListener("change", (e) => { if (e.target.matches("#practice-selection-list input[type=checkbox]")) updatePracticeSelectionCount(); });
 document.querySelector("#word-search").addEventListener("input",(e)=>{app.query=e.target.value;app.showAll=false;renderWords()});
 document.querySelector("#collection-filter").addEventListener("change",(e)=>{app.activeCollection=e.target.value;app.showAll=false;render()});
 document.addEventListener("keydown",(e)=>{if(e.key==="Escape"&&root.innerHTML)close()});
