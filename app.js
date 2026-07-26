@@ -16,21 +16,23 @@ const wordSeed = [
   { w: "nuance", p: "/ˈnjuːɑːns/", pos: "noun", d: "a subtle difference in meaning, expression, or tone", tr: "оттенок значения", e: "The translator captured the nuance of the speaker's hesitation.", r: ["subtlety", "shade", "distinction"], c: ["sat2", "reading"], s: "learning", m: 46, rec: ["The actor changed the nuance of the line by pausing before the final word.", "What does nuance most likely mean here?", ["A small shade of meaning", "The main plot", "A factual error", "A loud sound"]], ctx: ["Both proposals support public transport, but one focuses on fares and the other late-night service.", "What is the nuance between them?", ["They prioritize different benefits", "They have no goal in common", "One rejects transport", "They are identical"]], fill: ["Knowing the cultural _____ helped her avoid an unintended insult.", ["nuance", "scarcity", "convention", "resilience"]] },
 ];
 
-const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), streak: 7, accuracy: 82 });
+const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), streak: 7, accuracy: 82, theme: "dark" });
 const app = { ...freshWorkspace(), activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false };
 const root = document.querySelector("#overlay-root"), toast = document.querySelector("#toast");
 const storageKey = "lexora-state";
 const cloud = { enabled: false, client: null, user: null, state: "local", syncTimer: null, isLoading: false, needsWorkspaceChoice: false };
-let session, test, toastTimer;
+let session, test, cardDeck, toastTimer;
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[x]);
 const coll = (id) => app.collections.find((x) => x.id === id);
 const collectionWords = (id = app.activeCollection) => id === "all" ? app.words : app.words.filter((w) => w.c.includes(id));
 const due = (w) => w.due || w.s === "reviewing";
+const needsPractice = (w) => w.needsPractice === true || (w.needsPractice !== false && w.s !== "mastered");
+const practiceWords = (id = app.activeCollection) => collectionWords(id).filter(needsPractice);
 const statusColor = (s) => ({ new: "#638dff", learning: "#a66bef", reviewing: "#eebc63", mastered: "#58ca89" })[s];
-function workspaceState() { return { words: app.words, collections: app.collections, streak: app.streak, accuracy: app.accuracy }; }
+function workspaceState() { return { words: app.words, collections: app.collections, streak: app.streak, accuracy: app.accuracy, theme: app.theme }; }
 function applyWorkspace(state) {
   if (!state || !Array.isArray(state.words) || !Array.isArray(state.collections)) return false;
-  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
+  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, theme: state.theme === "light" ? "light" : "dark", activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
   return true;
 }
 function resetWorkspace() { applyWorkspace(freshWorkspace()); }
@@ -38,6 +40,17 @@ function saveLocal() { try { localStorage.setItem(storageKey, JSON.stringify(wor
 function load() { try { applyWorkspace(JSON.parse(localStorage.getItem(storageKey))); } catch {} }
 function save() { saveLocal(); if (cloud.enabled && cloud.user && !cloud.isLoading) queueCloudSave(); }
 function notice(s) { toast.textContent = s; toast.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 2700); }
+function renderTheme() {
+  const light = app.theme === "light", toggle = document.querySelector("#theme-toggle");
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", light ? "#f5f7fb" : "#081121");
+  if (!toggle) return;
+  toggle.setAttribute("aria-pressed", String(light));
+  toggle.setAttribute("aria-label", `Switch to ${light ? "dark" : "light"} mode`);
+  toggle.querySelector(".theme-symbol").textContent = light ? "☾" : "☀";
+  toggle.querySelector("span:last-child").textContent = light ? "Dark" : "Light";
+}
+function setTheme(theme) { app.theme = theme === "light" ? "light" : "dark"; renderTheme(); save(); notice(`${app.theme === "light" ? "Light" : "Dark"} mode is on.`); }
 
 function initials(name = "") { return name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "LX"; }
 function cloudReady() { const config = window.LEXORA_SUPABASE_CONFIG || {}; return Boolean(config.url && config.anonKey && window.supabase?.createClient); }
@@ -153,11 +166,14 @@ function renderCollections() {
   const filter = document.querySelector("#collection-filter"); filter.innerHTML = `<option value="all">All collections</option>${app.collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}`; filter.value = app.activeCollection;
 }
 function renderStats() {
+  const practiceCount = practiceWords().length;
   document.querySelector("#total-words").textContent = app.words.length;
   document.querySelector("#due-words").textContent = app.words.filter(due).length;
   document.querySelector("#nav-due").textContent = app.words.filter(due).length;
   document.querySelector("#mastered-words").textContent = app.words.filter((w) => w.s === "mastered").length;
   document.querySelector("#accuracy-value").textContent = `${app.accuracy}%`; document.querySelector("#streak-value").textContent = app.streak;
+  document.querySelector("#daily-action-count").textContent = practiceCount ? `${practiceCount} words ready to choose from` : "sort cards to build a queue";
+  document.querySelector("#review-action-count").textContent = `${practiceCount} ${practiceCount === 1 ? "word needs" : "words need"} practice`;
 }
 function matches() { const q = app.query.trim().toLowerCase(); return collectionWords().filter((w) => (app.activeStatus === "all" || w.s === app.activeStatus) && (!app.starredOnly || w.star) && (!q || `${w.w} ${w.d} ${w.r.join(" ")}`.toLowerCase().includes(q))); }
 function renderWords() {
@@ -168,13 +184,13 @@ function renderWords() {
 }
 function renderProgress() {
   const id = app.activeCollection === "all" ? "sat1" : app.activeCollection, words = collectionWords(id), average = words.length ? Math.round(words.reduce((n, w) => n + w.m, 0) / words.length) : 0;
-  document.querySelector("#progress-title").textContent = coll(id)?.name || "Your library"; document.querySelector("#collection-progress").textContent = `${average}%`; document.querySelector(".ring").style.background = `conic-gradient(var(--blue) 0 ${average}%, #29364e ${average}% 100%)`;
+  document.querySelector("#progress-title").textContent = coll(id)?.name || "Your library"; document.querySelector("#collection-progress").textContent = `${average}%`; document.querySelector(".ring").style.background = `conic-gradient(var(--blue) 0 ${average}%, var(--surface-3) ${average}% 100%)`;
   document.querySelector("#collection-mastered").textContent = `${words.filter((w) => w.s === "mastered").length} / ${words.length}`;
   [["new", "new-count"], ["learning", "learning-count"], ["reviewing", "review-count"]].forEach(([s, el]) => document.querySelector(`#${el}`).textContent = words.filter((w) => w.s === s).length);
 }
 function renderCalendar() { const a = [0,0,1,2,0,3,1,0,2,0,0,1,2,3,1,0,0,2,3,0,1,2,0,3,1,2,3,0,1,0,2,3,0,1,0]; document.querySelector("#calendar").innerHTML = a.map((x, i) => `<span data-level="${x}" class="${i === 25 ? "today" : ""}"></span>`).join(""); }
-function render() { renderCollections(); renderStats(); renderWords(); renderProgress(); renderCalendar(); }
-function close() { root.innerHTML = ""; session = test = null; }
+function render() { renderTheme(); renderCollections(); renderStats(); renderWords(); renderProgress(); renderCalendar(); }
+function close() { root.innerHTML = ""; session = test = cardDeck = null; }
 
 function taskVariants(w) {
   if (Array.isArray(w.tasks) && w.tasks.length) return w.tasks.filter((task) => task?.prompt && task?.options?.length >= 2);
@@ -185,7 +201,36 @@ function taskVariants(w) {
   ];
 }
 function shuffled(items) { return [...items].sort(() => Math.random() - .5); }
-function startSession(kind = "daily") { const pool = collectionWords().filter((w) => kind !== "review" || due(w)); const queue = [...(pool.length ? pool : app.words)].sort((a,b) => Number(due(b)) - Number(due(a)) || Number(b.hard) - Number(a.hard)).slice(0,3); session = { kind, queue, taskOrder: queue.map((word) => shuffled(taskVariants(word)).slice(0, 3)), wi: 0, step: 0, picked: null, input: "", submitted: false, score: 0, scored: 0, improved: 0 }; sessionView(); }
+function dailySetup() {
+  const words = practiceWords(), total = words.length;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">DAILY SESSION</p><h2>Choose today’s practice.</h2><p>${total ? `${total} ${total === 1 ? "word is" : "words are"} currently marked for practice. Daily Session lets you choose the size of the set — it is never fixed at three words.` : "Your practice queue is empty. Scan your cards first and mark the words you want to practise."}</p><div class="account-info"><div class="account-line"><span><b>Practice queue</b><small>Only words marked “I don’t know it” or not yet mastered are included.</small></span><span class="account-state">${total} words</span></div></div><label class="field-label">HOW MANY WORDS?</label><select id="daily-count" ${total ? "" : "disabled"}><option value="1">1 focused word</option><option value="5" selected>5 words</option><option value="10">10 words</option><option value="20">20 words</option><option value="all">All ${total} words in my queue</option></select><div class="modal-footer"><button class="secondary-action" data-action="scan-cards">Scan cards first</button><button class="modal-cta" data-action="begin-daily" ${total ? "" : "disabled"}>Start my practice</button></div></div></section></div>`;
+}
+function emptyReviewView() { root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">REVIEW QUEUE</p><h2>Nothing is waiting to be reviewed.</h2><p>Use cards to mark unfamiliar words. Only those words will return in Review Queue and future practice.</p><div class="modal-footer"><span class="subtle-note">You can change a card’s result anytime.</span><button class="modal-cta" data-action="scan-cards">Open cards</button></div></div></section></div>`; }
+function startSession(kind = "daily", providedWords) {
+  const pool = providedWords || practiceWords();
+  const queue = [...pool].sort((a,b) => Number(due(b)) - Number(due(a)) || Number(b.hard) - Number(a.hard));
+  if (!queue.length) return emptyReviewView();
+  session = { kind, queue, taskOrder: queue.map((word) => shuffled(taskVariants(word)).slice(0, 3)), wi: 0, step: 0, picked: null, input: "", submitted: false, score: 0, scored: 0, improved: 0, missed: new Set() }; sessionView();
+}
+function beginDailySession() { const count = document.querySelector("#daily-count")?.value || "all", words = practiceWords(), chosen = count === "all" ? words : words.slice(0, Number(count)); startSession("daily", chosen); }
+function startReview() { startSession("review", practiceWords()); }
+function startCards() { const words = collectionWords(); if (!words.length) return notice("Add a word before opening cards."); cardDeck = { queue: shuffled(words), index: 0, revealed: false, known: 0, unknown: 0, unknownIds: [] }; flashcardView(); }
+function flashcardView() {
+  const word = cardDeck.queue[cardDeck.index], progress = Math.round(cardDeck.index / cardDeck.queue.length * 100);
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal session-modal card-modal"><div class="session-top"><span class="session-label">CARD SORT · ${cardDeck.index + 1} OF ${cardDeck.queue.length}</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress"><i style="width:${progress}%"></i></div><div class="session-body"><span class="step-tag">BUILD YOUR REVIEW QUEUE</span><button class="flashcard ${cardDeck.revealed ? "revealed" : ""}" data-action="reveal-card" aria-label="${cardDeck.revealed ? "Card answer revealed" : "Reveal answer"}"><span class="flashcard-side flashcard-front"><small>WORD</small><strong>${esc(word.w)}</strong><em>${esc(word.p)}</em><b>${cardDeck.revealed ? "Tap to hide answer" : "Tap to reveal meaning"}</b></span><span class="flashcard-side flashcard-back"><small>MEANING</small><strong>${esc(word.d)}</strong><em>${esc(word.e)}</em></span></button><p class="card-help">After revealing the answer, decide whether this word should return in your practice queue.</p><div class="card-rating"><button class="card-rate unknown" data-action="rate-card" data-id="unknown" ${cardDeck.revealed ? "" : "disabled"}><span>↻</span><b>I don’t know it</b><small>Keep it for review</small></button><button class="card-rate known" data-action="rate-card" data-id="known" ${cardDeck.revealed ? "" : "disabled"}><span>✓</span><b>I know it</b><small>Remove from review</small></button></div></div></section></div>`;
+}
+function rateCard(result) {
+  const word = cardDeck.queue[cardDeck.index], known = result === "known";
+  word.needsPractice = !known; word.due = !known; word.hard = !known;
+  word.s = known ? "mastered" : "reviewing"; word.m = known ? Math.max(85, word.m) : Math.min(50, word.m);
+  if (known) cardDeck.known++; else { cardDeck.unknown++; cardDeck.unknownIds.push(word.id); }
+  save(); cardDeck.index++; cardDeck.revealed = false;
+  if (cardDeck.index >= cardDeck.queue.length) return cardResult(); flashcardView();
+}
+function cardResult() {
+  const ids = cardDeck.unknownIds, unknown = ids.length;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><div class="result"><div class="result-mark">✓</div><p class="eyebrow">CARD SORT COMPLETE</p><h2>Your review queue is ready.</h2><p>${cardDeck.known} ${cardDeck.known === 1 ? "word is" : "words are"} marked known and ${unknown} ${unknown === 1 ? "word is" : "words are"} marked for practice.</p><div class="result-grid"><div><strong>${cardDeck.known}</strong><span>known</span></div><div><strong>${unknown}</strong><span>need practice</span></div><div><strong>${cardDeck.queue.length}</strong><span>cards sorted</span></div></div><button class="modal-cta" data-action="practice-card-unknown" ${unknown ? "" : "disabled"}>Practice ${unknown} unknown ${unknown === 1 ? "word" : "words"} →</button><div class="modal-footer"><span class="subtle-note">Only words marked unknown will appear in Review Queue.</span><button class="secondary-action" data-action="close">Back to workspace</button></div></div></section></div>`;
+}
 function stepQuestion(w, step) { return step >= 1 && step <= 3 ? session.taskOrder[session.wi][step - 1] : null; }
 function options(q) { return `<div class="answer-list">${q.options.map((x,i) => `<button class="answer-option ${session.picked === i ? "selected" : ""}" data-action="pick" data-id="${i}" ${session.submitted ? "disabled" : ""}><span class="option-letter">${String.fromCharCode(65+i)}</span>${esc(x)}</button>`).join("")}</div>`; }
 function sessionView() {
@@ -197,19 +242,39 @@ function sessionView() {
   root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal session-modal"><div class="session-top"><span class="session-label">${session.kind === "review" ? "REVIEW QUEUE" : "DAILY SESSION"} · ${session.wi+1} OF ${session.queue.length} WORDS</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress"><i style="width:${progress}%"></i></div><div class="session-body">${content}</div></section></div>`;
   const input = document.querySelector("#answer-input"); if (input && !session.submitted) { const submitButton = root.querySelector('[data-action="submit"]'); input.focus(); input.addEventListener("input", () => { session.input = input.value; if (submitButton) submitButton.disabled = input.value.trim().length < (session.step === 5 ? 12 : 1); }); }
 }
-function submit() { if (session.step === 0) return advance(); const w = session.queue[session.wi]; let good = true; if (session.step >= 1 && session.step <= 3) good = session.picked === stepQuestion(w, session.step).correct; if (session.step === 4) good = session.input.trim().toLowerCase() === w.w; if (session.step === 5) good = session.input.trim().length >= 12; if (session.step) { session.scored++; if (good) session.score++; } session.submitted = true; sessionView(); }
-function advance() { const w = session.queue[session.wi]; if (session.step === 5) { const gain = Math.max(4, Math.round(session.score / Math.max(session.scored, 1) * 9)); w.m = Math.min(100, w.m + gain); w.due = false; w.s = w.m >= 84 ? "mastered" : w.m >= 52 ? "reviewing" : "learning"; session.improved++; } if (session.step === 5 && session.wi === session.queue.length - 1) return sessionResult(); if (session.step === 5) { session.wi++; session.step = 0; } else session.step++; Object.assign(session, { picked: null, input: "", submitted: false }); sessionView(); }
+function submit() { if (session.step === 0) return advance(); const w = session.queue[session.wi]; let good = true; if (session.step >= 1 && session.step <= 3) good = session.picked === stepQuestion(w, session.step).correct; if (session.step === 4) good = session.input.trim().toLowerCase() === w.w; if (session.step === 5) good = session.input.trim().length >= 12; if (session.step) { session.scored++; if (good) session.score++; else session.missed.add(w.id); } session.submitted = true; sessionView(); }
+function advance() { const w = session.queue[session.wi]; if (session.step === 5) { const gain = Math.max(4, Math.round(session.score / Math.max(session.scored, 1) * 9)); const missed = session.missed.has(w.id); w.m = Math.min(100, w.m + gain); w.needsPractice = missed; w.due = missed; w.hard = missed; w.s = missed ? "reviewing" : "mastered"; session.improved++; } if (session.step === 5 && session.wi === session.queue.length - 1) return sessionResult(); if (session.step === 5) { session.wi++; session.step = 0; } else session.step++; Object.assign(session, { picked: null, input: "", submitted: false }); sessionView(); }
 function sessionResult() { const accuracy = Math.round(session.score / Math.max(session.scored, 1) * 100); app.accuracy = Math.round((app.accuracy*3 + accuracy)/4); app.streak++; save(); render(); root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><div class="result"><div class="result-mark">✓</div><p class="eyebrow">SESSION COMPLETE</p><h2>Meaning made memorable.</h2><p>You moved through every layer of understanding — not just the definition.</p><div class="result-grid"><div><strong>${accuracy}%</strong><span>session accuracy</span></div><div><strong>${session.queue.length}</strong><span>words learned</span></div><div><strong>${session.improved}</strong><span>words improved</span></div></div><p class="next-review">Next review: <b>tomorrow at 09:00</b> · difficult answers return sooner.</p><button class="modal-cta green" data-action="close">Back to my workspace</button></div></section></div>`; }
 
-function testConfig() { test = { collection: app.collections[0].id }; root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">TEST LAB</p><h2>Build a useful test.</h2><p>Answers stay hidden until you finish. Choose a focused set, then see explanations together.</p><label class="field-label">VOCABULARY COLLECTION</label><div class="collection-choice" id="test-collections">${app.collections.slice(0,4).map((c,i) => `<button class="choice ${i===0?"selected":""}" data-action="test-collection" data-id="${c.id}"><strong>${esc(c.name)}</strong><span>${collectionWords(c.id).length} words available</span></button>`).join("")}</div><div class="config-grid"><label><span class="field-label">QUESTIONS</span><select id="test-count"><option value="5">5 questions</option><option value="8">8 questions</option><option value="10">10 questions</option></select></label><label><span class="field-label">DIFFICULTY</span><select><option>Balanced</option><option>Challenging</option><option>Mixed review</option></select></label></div><span class="field-label">QUESTION TYPES</span><div class="check-grid"><label class="check-item"><input type="checkbox" checked> Definition</label><label class="check-item"><input type="checkbox" checked> Meaning in context</label><label class="check-item"><input type="checkbox" checked> Contextual inference</label><label class="check-item"><input type="checkbox" checked> Sentence completion</label><label class="check-item"><input type="checkbox"> Typing the word</label><label class="check-item"><input type="checkbox"> Synonym / antonym</label></div><div class="modal-footer"><label class="check-item"><input id="hard-only" type="checkbox"> Starred / difficult only</label><button class="modal-cta purple" data-action="begin-test">Start test →</button></div></div></section></div>`; }
+function testConfig() { test = { collection: app.collections[0].id }; root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">TEST LAB</p><h2>Build a useful test.</h2><p>Answers stay hidden until you finish. By default, the test uses only words you have marked for practice.</p><label class="field-label">VOCABULARY COLLECTION</label><div class="collection-choice" id="test-collections">${app.collections.slice(0,4).map((c,i) => `<button class="choice ${i===0?"selected":""}" data-action="test-collection" data-id="${c.id}"><strong>${esc(c.name)}</strong><span>${practiceWords(c.id).length} words need practice</span></button>`).join("")}</div><div class="config-grid"><label><span class="field-label">QUESTIONS</span><select id="test-count"><option value="5">5 questions</option><option value="8">8 questions</option><option value="10">10 questions</option></select></label><label><span class="field-label">DIFFICULTY</span><select><option>Balanced</option><option>Challenging</option><option>Mixed review</option></select></label></div><span class="field-label">QUESTION TYPES</span><div class="check-grid"><label class="check-item"><input type="checkbox" checked> Definition</label><label class="check-item"><input type="checkbox" checked> Meaning in context</label><label class="check-item"><input type="checkbox" checked> Contextual inference</label><label class="check-item"><input type="checkbox" checked> Sentence completion</label><label class="check-item"><input type="checkbox"> Typing the word</label><label class="check-item"><input type="checkbox"> Synonym / antonym</label></div><div class="modal-footer"><label class="check-item"><input id="hard-only" type="checkbox" checked> Only words needing practice</label><button class="modal-cta purple" data-action="begin-test">Start test →</button></div></div></section></div>`; }
 function makeQuestion(w, i) { const imported = taskVariants(w)[i % taskVariants(w).length]; const fallback = i % 3 === 0 ? ["Which definition best matches this word?", [w.d, ...app.words.filter((x) => x.id !== w.id).slice(0,3).map((x) => x.d)], 0] : [imported.prompt, imported.options, imported.correct]; const options = fallback[1].map((t,n)=>({t,right:n===fallback[2]})).sort(()=>Math.random()-.5); return { w, prompt: fallback[0], options, correct: options.findIndex((o)=>o.right) }; }
-function beginTest() { let pool = collectionWords(test.collection); if (document.querySelector("#hard-only").checked) pool = pool.filter((w)=>w.star||w.hard); if (pool.length < 2) pool = app.words; const count = +document.querySelector("#test-count").value, ordered = [...pool].sort(()=>Math.random()-.5); test = { ...test, qs: Array.from({length:count},(_,i)=>makeQuestion(ordered[i%ordered.length],i)), i:0, selected:null, answers:[] }; testView(); }
+function beginTest() { let pool = collectionWords(test.collection); if (document.querySelector("#hard-only").checked) pool = pool.filter(needsPractice); if (!pool.length) return notice("No words in this set need practice. Scan cards or choose another collection."); const count = +document.querySelector("#test-count").value, ordered = [...pool].sort(()=>Math.random()-.5); test = { ...test, qs: Array.from({length:count},(_,i)=>makeQuestion(ordered[i%ordered.length],i)), i:0, selected:null, answers:[] }; testView(); }
 function testView() { const q=test.qs[test.i], p=Math.round(test.i/test.qs.length*100); root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal session-modal"><div class="session-top"><span class="session-label">VOCAB TEST · QUESTION ${test.i+1} OF ${test.qs.length}</span><button class="icon-button session-close" data-action="close">×</button></div><div class="session-progress"><i style="width:${p}%;background:var(--purple)"></i></div><div class="session-body"><span class="step-tag" style="color:#d2b7ff;background:rgba(147,97,242,.12)">ANSWER NOW · REVIEW LATER</span><h2>Choose the best answer.</h2><p class="question-kicker">${esc(q.prompt)}</p><div class="answer-list">${q.options.map((o,i)=>`<button class="answer-option ${test.selected===i?"selected":""}" data-action="test-answer" data-id="${i}"><span class="option-letter">${String.fromCharCode(65+i)}</span>${esc(o.t)}</button>`).join("")}</div><div class="session-actions"><button class="modal-cta purple" data-action="next-test" ${test.selected===null?"disabled":""}>${test.i+1===test.qs.length?"Finish test →":"Next question →"}</button></div></div></section></div>`; }
 function nextTest() { test.answers.push(test.selected); if(test.i===test.qs.length-1)return testResult(); test.i++;test.selected=null;testView(); }
 function testResult() { const correct=test.qs.filter((q,i)=>q.correct===test.answers[i]).length, percent=Math.round(correct/test.qs.length*100); app.accuracy=Math.round((app.accuracy*2+percent)/3);save();render(); const reviews=test.qs.map((q,i)=>`<div class="test-review ${q.correct===test.answers[i]?"good":"bad"}"><span>${q.correct===test.answers[i]?"✓":"×"}</span><p><b>${esc(q.w.w)}</b> · “${esc(q.w.w)}” means ${esc(q.w.d)}.<small>${q.correct===test.answers[i]?"Correct":`Your answer: ${esc(q.options[test.answers[i]].t)}`}</small></p></div>`).join(""); root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro test-results"><p class="eyebrow">TEST COMPLETE</p><h2>${percent>=80?"Strong work.":"Useful signal."}</h2><p>${correct} of ${test.qs.length} correct. The answers below explain every word in context.</p><div class="result-grid"><div><strong>${percent}%</strong><span>accuracy</span></div><div><strong>${correct}</strong><span>correct</span></div><div><strong>${test.qs.length-correct}</strong><span>to revisit</span></div></div><div class="test-review-list">${reviews}</div><div class="modal-footer"><span class="subtle-note">Incorrect answers are prioritised in review.</span><button class="modal-cta purple" data-action="close">Done</button></div></div></section></div>`; }
 
 function collectionModal() { root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">NEW COLLECTION</p><h2>Give a set of words a home.</h2><p>Collections can overlap, so a word can appear in both SAT and IELTS study plans.</p><label class="field-label">COLLECTION NAME</label><input id="collection-name" placeholder="e.g. Words from October reading" maxlength="38" autofocus><label class="field-label">ACCENT</label><div class="color-choice"><button class="color-dot selected" data-action="color" data-id="#638dff" style="--dot:#638dff"></button><button class="color-dot" data-action="color" data-id="#a36af3" style="--dot:#a36af3"></button><button class="color-dot" data-action="color" data-id="#51c88a" style="--dot:#51c88a"></button><button class="color-dot" data-action="color" data-id="#e579aa" style="--dot:#e579aa"></button></div><div class="modal-footer"><span class="subtle-note">You can add words next.</span><button class="modal-cta" data-action="save-collection">Create collection</button></div></div></section></div>`; }
 function saveCollection() { const input=document.querySelector("#collection-name"),name=input.value.trim(); if(!name)return notice("Give the collection a name first."); const color=document.querySelector(".color-dot.selected")?.dataset.id||"#638dff",id=`collection-${Date.now()}`;app.collections.push({id,name,color});app.activeCollection=id;save();render();close();notice(`“${name}” is ready for words.`); }
+function collectionOptions() {
+  if (app.activeCollection === "all") return notice("Choose a collection first.");
+  const collection = coll(app.activeCollection); if (!collection) return notice("That collection is no longer available.");
+  const words = collectionWords(collection.id), exclusive = words.filter((word) => word.c.length === 1).length;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro collection-settings"><p class="eyebrow">COLLECTION SETTINGS</p><h2>${esc(collection.name)}</h2><p>This collection contains ${words.length} ${words.length === 1 ? "word" : "words"}. Deleting it never removes words by surprise.</p><div class="account-info"><div class="account-line"><span><b>Keep words in your library</b><small>Words are removed from this collection and stay available in All collections.</small></span></div>${exclusive ? `<div class="account-line"><span><b>${exclusive} word${exclusive === 1 ? "" : "s"} only belong${exclusive === 1 ? "s" : ""} here</b><small>You can choose to remove these words in the confirmation step.</small></span></div>` : ""}</div><div class="modal-footer"><span class="subtle-note">This cannot be undone after syncing.</span><button class="danger-action" data-action="prepare-delete-collection" data-id="${collection.id}">Delete collection</button></div></div></section></div>`;
+}
+function deleteCollectionModal(id) {
+  const collection = coll(id); if (!collection) return close();
+  const words = collectionWords(id), exclusive = words.filter((word) => word.c.length === 1).length;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro collection-settings"><p class="eyebrow">DELETE COLLECTION</p><h2>Delete “${esc(collection.name)}”?</h2><p>Choose what should happen to its ${words.length} ${words.length === 1 ? "word" : "words"}.</p><label class="delete-choice selected"><input type="radio" name="collection-delete-mode" value="keep" checked><span><b>Keep all words in my library</b><small>Only the collection is deleted. This is the safe default.</small></span></label>${exclusive ? `<label class="delete-choice"><input type="radio" name="collection-delete-mode" value="exclusive"><span><b>Also remove ${exclusive} word${exclusive === 1 ? "" : "s"} only in this collection</b><small>Words shared with another collection will be kept.</small></span></label>` : ""}<div class="modal-footer"><button class="secondary-action" data-action="collection-options">Go back</button><button class="danger-action" data-action="confirm-delete-collection" data-id="${id}">Delete collection</button></div></div></section></div>`;
+}
+function deleteCollection(id) {
+  const collection = coll(id); if (!collection) return close();
+  const removeExclusive = document.querySelector('input[name="collection-delete-mode"]:checked')?.value === "exclusive";
+  const exclusiveIds = new Set(app.words.filter((word) => word.c.includes(id) && word.c.length === 1).map((word) => word.id));
+  app.words = app.words.filter((word) => !(removeExclusive && exclusiveIds.has(word.id))).map((word) => ({ ...word, c: word.c.filter((collectionId) => collectionId !== id) }));
+  app.collections = app.collections.filter((item) => item.id !== id);
+  app.activeCollection = "all"; app.showAll = false; save(); render(); close();
+  notice(`Removed “${collection.name}”${removeExclusive && exclusiveIds.size ? ` and ${exclusiveIds.size} exclusive ${exclusiveIds.size === 1 ? "word" : "words"}` : ""}.`);
+}
 function wordModal(id) { const w=app.words.find((x)=>x.id===id), editing=!!w; root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">${editing?"WORD DETAILS":"ADD A WORD"}</p><h2>${editing?esc(w.w):"Build your library."}</h2><div class="config-grid"><label><span class="field-label">WORD</span><input id="editor-word" value="${esc(w?.w||"")}" placeholder="e.g. tenacious"></label><label><span class="field-label">PART OF SPEECH</span><select id="editor-pos">${["adjective","noun","verb","adverb"].map((x)=>`<option ${w?.pos===x?"selected":""}>${x}</option>`).join("")}</select></label></div><label><span class="field-label">SIMPLE DEFINITION</span><input id="editor-definition" value="${esc(w?.d||"")}" placeholder="What does it mean in plain English?"></label><label><span class="field-label">EXAMPLE SENTENCE</span><textarea class="use-textarea" id="editor-example" placeholder="Use it in a real situation…">${esc(w?.e||"")}</textarea></label><span class="field-label">IN COLLECTIONS</span><div class="check-grid">${app.collections.map((c)=>`<label class="check-item"><input type="checkbox" value="${c.id}" ${w?.c.includes(c.id)?"checked":""}> ${esc(c.name)}</label>`).join("")}</div><div class="modal-footer">${editing?`<button class="danger-button" data-action="delete" data-id="${w.id}">Remove word</button>`:`<span class="subtle-note">You can edit details later.</span>`}<button class="modal-cta" data-action="save-word" data-id="${w?.id||""}">${editing?"Save changes":"Add word"}</button></div></div></section></div>`; }
 function saveWord(id) { const w=document.querySelector("#editor-word").value.trim().toLowerCase(),d=document.querySelector("#editor-definition").value.trim(),e=document.querySelector("#editor-example").value.trim(),pos=document.querySelector("#editor-pos").value,c=[...document.querySelectorAll(".check-grid input:checked")].map(x=>x.value); if(!w||!d||!c.length)return notice("Add a word, its meaning, and at least one collection."); const data={w,d,e,pos,c}; if(id)Object.assign(app.words.find(x=>x.id===id),data);else app.words.unshift({id:`${w}-${Date.now()}`,...data,p:"/add pronunciation/",tr:"",r:[],s:"new",m:0,star:false,hard:false,due:true,rec:[e||`The word ${w} appeared in the article.`,`What does ${w} most likely mean?`,[d,"A familiar routine","A sudden change","A source of doubt"]],ctx:[e||`The writer used ${w} in a discussion.`,`What should a reader do next?`,["Use surrounding context","Ignore the word","Assume no effect","Choose randomly"]],fill:[`The writer chose the word _____.`,[w,"ordinary","unclear","limited"]]});save();render();close();notice(`“${w}” ${id?"was updated":"was added to your library"}.`); }
 
@@ -217,10 +282,16 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-action]"); if (!t) return;
   const a = t.dataset.action, id = t.dataset.id;
   if (a === "close") close();
-  if (a === "start") startSession();
-  if (a === "review") startSession("review");
+  if (a === "start") dailySetup();
+  if (a === "review") startReview();
+  if (a === "scan-cards") startCards();
+  if (a === "begin-daily") beginDailySession();
+  if (a === "reveal-card") { cardDeck.revealed = !cardDeck.revealed; flashcardView(); }
+  if (a === "rate-card") rateCard(id);
+  if (a === "practice-card-unknown") startSession("review", app.words.filter((word) => cardDeck.unknownIds.includes(word.id)));
   if (a === "test") testConfig();
   if (a === "collection") { app.activeCollection = id; app.showAll = false; render(); }
+  if (a === "collection-options") collectionOptions();
   if (a === "star-filter") { app.starredOnly = !app.starredOnly; t.setAttribute("aria-pressed", app.starredOnly); renderWords(); }
   if (a === "star") { const w = app.words.find((x) => x.id === id); w.star = !w.star; save(); renderWords(); }
   if (a === "clear") { app.activeStatus = "all"; app.starredOnly = false; app.query = ""; document.querySelector("#word-search").value = ""; document.querySelectorAll(".filter-tab").forEach((x) => x.classList.toggle("active", x.dataset.status === "all")); renderWords(); }
@@ -235,6 +306,8 @@ document.addEventListener("click", (e) => {
   if (a === "new-collection") collectionModal();
   if (a === "color") document.querySelectorAll(".color-dot").forEach((x) => x.classList.toggle("selected", x === t));
   if (a === "save-collection") saveCollection();
+  if (a === "prepare-delete-collection") deleteCollectionModal(id);
+  if (a === "confirm-delete-collection") deleteCollection(id);
   if (a === "add-word") wordModal();
   if (a === "edit") wordModal(id);
   if (a === "save-word") saveWord(id);
@@ -246,6 +319,7 @@ document.addEventListener("click", (e) => {
   if (a === "sync-now") pushCloud(true);
   if (a === "export-backup") downloadBackup();
   if (a === "sign-out") signOut();
+  if (a === "theme") setTheme(app.theme === "light" ? "dark" : "light");
   if (a === "focus") { document.body.classList.toggle("focus-mode"); notice(document.body.classList.contains("focus-mode") ? "Focus mode on — distractions dimmed." : "Focus mode off."); }
   if (a === "menu") document.querySelector(".sidebar").classList.toggle("open");
 });

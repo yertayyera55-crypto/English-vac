@@ -45,6 +45,7 @@
           <div class="crumb"><span>July 25</span><strong>Friday</strong></div>
           <div class="topbar-actions">
             <button class="sync-pill" data-action="profile" id="sync-status" aria-label="Storage and account settings"><i></i><span>Browser only</span></button>
+            <button id="theme-toggle" class="theme-toggle" data-action="theme" aria-pressed="false" aria-label="Switch to light mode"><span class="theme-symbol" aria-hidden="true">☀</span><span>Light</span></button>
             <button class="quiet-button" data-action="focus"><span class="focus-dot"></span> Focus mode</button>
             <button class="icon-button notification" aria-label="Notifications">♧<em></em></button>
           </div>
@@ -102,13 +103,13 @@
 
           <aside class="right-rail" aria-label="Study actions and activity">
             <section class="action-stack" aria-label="Study actions">
-              <button class="primary-action daily-action" data-action="start"><span class="action-icon">▶</span><span><small>12 min · 9 words</small>Start daily session</span><b>→</b></button>
-              <button class="primary-action review-action" data-action="review"><span class="action-icon">↻</span><span><small>18 words waiting</small>Review queue</span><b>→</b></button>
+              <button class="primary-action daily-action" data-action="start"><span class="action-icon">▶</span><span><small id="daily-action-count">choose your target</small>Start daily session</span><b>→</b></button>
+              <button class="primary-action review-action" data-action="review"><span class="action-icon">↻</span><span><small id="review-action-count">0 words need practice</small>Review queue</span><b>→</b></button>
               <button class="primary-action test-action" data-action="test"><span class="action-icon">✦</span><span><small>Choose your format</small>Vocab test</span><b>→</b></button>
             </section>
 
             <section class="surface progress-surface" aria-labelledby="progress-title">
-              <div class="surface-heading compact"><div><p class="eyebrow">SELECTED COLLECTION</p><h2 id="progress-title">SAT Vocab #1</h2></div><button class="more-button" aria-label="Collection options">•••</button></div>
+              <div class="surface-heading compact"><div><p class="eyebrow">SELECTED COLLECTION</p><h2 id="progress-title">SAT Vocab #1</h2></div><button class="more-button" data-action="collection-options" aria-label="Collection options" title="Collection options">•••</button></div>
               <div class="progress-main">
                 <div class="ring" role="img" aria-label="62 percent complete"><span><strong id="collection-progress">62%</strong><small>ready</small></span></div>
                 <div class="progress-copy"><strong id="collection-mastered">46 / 74</strong><span>words mastered</span><p>Next milestone: 50 words</p></div>
