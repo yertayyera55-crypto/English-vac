@@ -22,7 +22,7 @@ Use **Import file** in the Word bank to load `.xlsx`, `.csv`, or `.tsv` files. D
 
 The required columns are `word` and `definition`. The downloadable template contains three task groups: `task_1`, `task_2`, and `task_3`. Each group can include up to three variants — for example, `task_1_variant_1_prompt` through `task_1_variant_3_correct`. A variant has a prompt, a question, four answer choices, and a correct answer letter (`A`–`D`). That means an imported word can have up to nine SAT-style question variants: three meaning-in-context, three inference, and three sentence-completion questions.
 
-For each practice session, Lexora randomly selects one variant of each task type. Vocab Tests also randomly draw from the imported variants, so the same word is not tied to one repeated context. There is no built-in AI or LLM: you can prepare these columns yourself or ask any external AI to fill the downloaded template. Older files with one task per type (`task_1_prompt`, `task_2_prompt`, and `task_3_prompt`) still import normally.
+For each practice session, Lexora randomly selects one variant of each task type. Vocab Tests first preview every selected word, then mix questions from the whole set while also randomly drawing from the imported variants — no word is tested repeatedly in a block. There is no built-in AI or LLM: you can prepare these columns yourself or ask any external AI to fill the downloaded template. Older files with one task per type (`task_1_prompt`, `task_2_prompt`, and `task_3_prompt`) still import normally.
 
 ## Check the JavaScript
 
