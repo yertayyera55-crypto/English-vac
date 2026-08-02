@@ -190,6 +190,14 @@ function renderProgress() {
 }
 function renderCalendar() { const a = [0,0,1,2,0,3,1,0,2,0,0,1,2,3,1,0,0,2,3,0,1,2,0,3,1,2,3,0,1,0,2,3,0,1,0]; document.querySelector("#calendar").innerHTML = a.map((x, i) => `<span data-level="${x}" class="${i === 25 ? "today" : ""}"></span>`).join(""); }
 function render() { renderTheme(); renderCollections(); renderStats(); renderWords(); renderProgress(); renderCalendar(); }
+function setMobileNavigation(open) {
+  const sidebar = document.querySelector(".sidebar"), menuButton = document.querySelector(".mobile-menu");
+  if (!sidebar) return;
+  sidebar.classList.toggle("open", open);
+  document.body.classList.toggle("mobile-nav-open", open);
+  if (menuButton) menuButton.setAttribute("aria-expanded", String(open));
+}
+function closeMobileNavigation() { setMobileNavigation(false); }
 function close() { root.innerHTML = ""; session = test = cardDeck = null; }
 
 function taskVariants(w) {
@@ -409,11 +417,17 @@ document.addEventListener("click", (e) => {
   if (a === "sign-out") signOut();
   if (a === "theme") setTheme(app.theme === "light" ? "dark" : "light");
   if (a === "focus") { document.body.classList.toggle("focus-mode"); notice(document.body.classList.contains("focus-mode") ? "Focus mode on — distractions dimmed." : "Focus mode off."); }
-  if (a === "menu") document.querySelector(".sidebar").classList.toggle("open");
+  if (a === "menu") setMobileNavigation(!document.querySelector(".sidebar")?.classList.contains("open"));
+  if (a === "close-menu") closeMobileNavigation();
+});
+document.addEventListener("click", (event) => {
+  const navigationItem = event.target.closest(".main-nav a, .collection-nav button, .brand, .profile-button, [data-action='new-collection']");
+  if (navigationItem && window.matchMedia("(max-width: 760px)").matches) closeMobileNavigation();
 });
 document.addEventListener("click",(e)=>{const t=e.target.closest(".filter-tab");if(!t)return;app.activeStatus=t.dataset.status;app.showAll=false;document.querySelectorAll(".filter-tab").forEach(x=>x.classList.toggle("active",x===t));renderWords()});
 document.addEventListener("change", (e) => { if (e.target.matches("#practice-selection-list input[type=checkbox]")) updatePracticeSelectionCount(); });
 document.querySelector("#word-search").addEventListener("input",(e)=>{app.query=e.target.value;app.showAll=false;renderWords()});
 document.querySelector("#collection-filter").addEventListener("change",(e)=>{app.activeCollection=e.target.value;app.showAll=false;render()});
-document.addEventListener("keydown",(e)=>{if(e.key==="Escape"&&root.innerHTML)close()});
+document.addEventListener("keydown",(e)=>{if(e.key!=="Escape")return;if(document.querySelector(".sidebar")?.classList.contains("open"))return closeMobileNavigation();if(root.innerHTML)close()});
+window.addEventListener("resize", () => { if (window.innerWidth > 760) closeMobileNavigation(); });
 boot();
