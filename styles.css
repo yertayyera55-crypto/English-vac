@@ -177,7 +177,7 @@ html[data-theme="light"] .test-collection-label span { color: #71809a; }html[dat
     box-shadow: none;
   }
   .sidebar.open { display: flex; transform: translateX(0); visibility: visible; pointer-events: auto; box-shadow: 20px 0 60px rgba(0,0,0,.45); }
-  .mobile-nav-backdrop { display: block; position: fixed; z-index: 39; inset: 0; border: 0; background: rgba(3,7,15,.62); backdrop-filter: blur(2px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s ease, visibility .2s ease; }
+  .mobile-nav-backdrop { display: block; position: fixed; z-index: 39; inset: 0; border: 0; background: rgba(3,7,15,.58); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s ease, visibility .2s ease; }
   body.mobile-nav-open .mobile-nav-backdrop { opacity: 1; visibility: visible; pointer-events: auto; }
   .mobile-nav-close { display: grid; position: absolute; top: max(13px, env(safe-area-inset-top)); right: 11px; width: 44px; height: 44px; font-size: 24px; }
   .sidebar .brand { padding-right: 48px; }
