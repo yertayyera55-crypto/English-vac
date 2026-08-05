@@ -81,16 +81,18 @@ function readImportFile(file) {
 function inspectImportRows(rows) {
   const valid = rows.filter((row) => row.word && row.definition);
   const customTasks = valid.reduce((total, row) => total + customTasksForRow(row).length, 0);
-  return { total: rows.length, valid: valid.length, invalid: rows.length - valid.length, customTasks };
+  const knownSpellings = new Set(app.words.map((word) => word.w.toLowerCase()));
+  const existing = valid.filter((row) => knownSpellings.has(row.word.toLowerCase())).length;
+  return { total: rows.length, valid: valid.length, invalid: rows.length - valid.length, customTasks, existing };
 }
 
 function renderImportPreview() {
   const preview = document.querySelector("#import-preview");
   const button = document.querySelector('[data-action="process-import"]');
   if (!importState.summary) return;
-  const { total, valid, invalid, customTasks } = importState.summary;
+  const { total, valid, invalid, customTasks, existing } = importState.summary;
   preview.className = "import-preview";
-  preview.innerHTML = `<strong>${esc(importState.file.name)} is ready to import</strong><ul><li>${valid} valid word${valid === 1 ? "" : "s"} found${invalid ? ` · ${invalid} row${invalid === 1 ? "" : "s"} need a word and definition` : ""}</li><li>${customTasks} custom SAT-style task variant${customTasks === 1 ? "" : "s"} found</li><li>Existing words with the same spelling will be updated.</li></ul>`;
+  preview.innerHTML = `<strong>${esc(importState.file.name)} is ready to import</strong><ul><li>${valid} valid word${valid === 1 ? "" : "s"} found${invalid ? ` · ${invalid} row${invalid === 1 ? "" : "s"} need a word and definition` : ""}</li><li>${customTasks} custom SAT-style task variant${customTasks === 1 ? "" : "s"} found</li>${existing ? `<li><b>${existing} already in your Word bank</b> · each will be imported as an independent copy, so every collection keeps its own tasks.</li>` : ""}</ul>`;
   button.disabled = !valid || Boolean(invalid && !valid);
 }
 
@@ -152,18 +154,31 @@ function findOrCreateCollection(name, index) {
 function importWords() {
   const validRows = importState.rows.filter((row) => row.word && row.definition);
   if (!validRows.length) { notice("Choose a file with a word and definition in each row."); return; }
-  let added = 0, updated = 0, variants = 0;
+  let added = 0, updated = 0, copied = 0, variants = 0;
   validRows.forEach((row, index) => {
     const word = row.word.toLowerCase();
     const names = parseCollections(row.collections);
-    const collectionIDs = (names.length ? names : [app.activeCollection === "all" ? "SAT Vocab #1" : coll(app.activeCollection)?.name]).filter(Boolean).map((name) => findOrCreateCollection(name, index));
-    const draft = { w: word, p: row.pronunciation || "/add pronunciation/", pos: row.part_of_speech || "word", d: row.definition, tr: row.translation || "", e: row.example_sentence || `The author used ${word} in the passage.`, r: String(row.synonyms || "").split(/[;,|]/).map((value) => value.trim()).filter(Boolean), c: collectionIDs, s: ["new", "learning", "reviewing", "mastered"].includes(row.status?.toLowerCase()) ? row.status.toLowerCase() : "new", m: 0, star: parseBool(row.starred), hard: parseBool(row.difficult), due: true };
-    draft.tasks = rowTasks(row, draft); variants += draft.tasks.length;
-    const existing = app.words.find((item) => item.w.toLowerCase() === word);
-    if (existing) { Object.assign(existing, draft); updated += 1; }
-    else { app.words.unshift({ id: `${word}-${Date.now()}-${index}`, ...draft }); added += 1; }
+    const activeCollectionName = app.activeCollection === "all" ? "" : coll(app.activeCollection)?.name;
+    const collectionNames = names.length ? [...names, activeCollectionName] : [activeCollectionName || "SAT Vocab #1"];
+    const collectionIDs = [...new Set(collectionNames.filter(Boolean).map((name) => findOrCreateCollection(name, index)))];
+    const alreadyInBank = app.words.some((item) => item.w.toLowerCase() === word);
+    const baseDraft = { w: word, p: row.pronunciation || "/add pronunciation/", pos: row.part_of_speech || "word", d: row.definition, tr: row.translation || "", e: row.example_sentence || `The author used ${word} in the passage.`, r: String(row.synonyms || "").split(/[;,|]/).map((value) => value.trim()).filter(Boolean), s: ["new", "learning", "reviewing", "mastered"].includes(row.status?.toLowerCase()) ? row.status.toLowerCase() : "new", m: 0, star: parseBool(row.starred), hard: parseBool(row.difficult), due: true };
+    collectionIDs.forEach((collectionID, collectionIndex) => {
+      const draft = { ...baseDraft, c: [collectionID] };
+      draft.tasks = rowTasks(row, draft); variants += draft.tasks.length;
+      const matchingWords = app.words.filter((item) => item.w.toLowerCase() === word && Array.isArray(item.c) && item.c.includes(collectionID));
+      const ownCopy = matchingWords.find((item) => item.c.length === 1);
+      matchingWords.filter((item) => item !== ownCopy && item.c.length > 1).forEach((item) => { item.c = item.c.filter((id) => id !== collectionID); });
+      if (ownCopy) { Object.assign(ownCopy, draft); updated += 1; }
+      else {
+        app.words.unshift({ id: `${word}-${Date.now()}-${index}-${collectionIndex}`, ...draft });
+        added += 1; if (alreadyInBank) copied += 1;
+      }
+    });
   });
-  save(); render(); close(); notice(`Imported ${added} new word${added === 1 ? "" : "s"}${updated ? ` · updated ${updated}` : ""} · ${variants} rotating task variants ready.`);
+  const newWords = added - copied;
+  const importSummary = [newWords ? `Imported ${newWords} new word${newWords === 1 ? "" : "s"}` : "", copied ? `${copied} independent ${copied === 1 ? "copy" : "copies"} already in your Word bank` : "", updated ? `updated ${updated} in this collection` : "", `${variants} rotating task variants ready`].filter(Boolean).join(" · ");
+  save(); render(); close(); notice(importSummary);
 }
 function downloadTemplate() {
   const quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
