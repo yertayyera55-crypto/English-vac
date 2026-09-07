@@ -16,7 +16,7 @@ const wordSeed = [
   { w: "nuance", p: "/ˈnjuːɑːns/", pos: "noun", d: "a subtle difference in meaning, expression, or tone", tr: "оттенок значения", e: "The translator captured the nuance of the speaker's hesitation.", r: ["subtlety", "shade", "distinction"], c: ["sat2", "reading"], s: "learning", m: 46, rec: ["The actor changed the nuance of the line by pausing before the final word.", "What does nuance most likely mean here?", ["A small shade of meaning", "The main plot", "A factual error", "A loud sound"]], ctx: ["Both proposals support public transport, but one focuses on fares and the other late-night service.", "What is the nuance between them?", ["They prioritize different benefits", "They have no goal in common", "One rejects transport", "They are identical"]], fill: ["Knowing the cultural _____ helped her avoid an unintended insult.", ["nuance", "scarcity", "convention", "resilience"]] },
 ];
 
-const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), flashcardSets: [], streak: 7, accuracy: 82, theme: "dark" });
+const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), flashcardSets: [], readingLab: null, streak: 7, accuracy: 82, theme: "dark" });
 const app = { ...freshWorkspace(), activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false };
 const root = document.querySelector("#overlay-root"), toast = document.querySelector("#toast");
 const storageKey = "lexora-state";
@@ -29,10 +29,10 @@ const due = (w) => w.due || w.s === "reviewing";
 const needsPractice = (w) => w.needsPractice === true || (w.needsPractice !== false && w.s !== "mastered");
 const practiceWords = (id = app.activeCollection) => collectionWords(id).filter(needsPractice);
 const statusColor = (s) => ({ new: "#638dff", learning: "#a66bef", reviewing: "#eebc63", mastered: "#58ca89" })[s];
-function workspaceState() { return { words: app.words, collections: app.collections, flashcardSets: app.flashcardSets, streak: app.streak, accuracy: app.accuracy, theme: app.theme }; }
+function workspaceState() { return { words: app.words, collections: app.collections, flashcardSets: app.flashcardSets, readingLab: app.readingLab, streak: app.streak, accuracy: app.accuracy, theme: app.theme }; }
 function applyWorkspace(state) {
   if (!state || !Array.isArray(state.words) || !Array.isArray(state.collections)) return false;
-  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, flashcardSets: Array.isArray(state.flashcardSets) ? state.flashcardSets : [], streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, theme: state.theme === "light" ? "light" : "dark", activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
+  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, flashcardSets: Array.isArray(state.flashcardSets) ? state.flashcardSets : [], readingLab: state.readingLab && typeof state.readingLab === "object" ? state.readingLab : null, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, theme: state.theme === "light" ? "light" : "dark", activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
   return true;
 }
 function resetWorkspace() { applyWorkspace(freshWorkspace()); }
@@ -198,7 +198,7 @@ function setMobileNavigation(open) {
   if (menuButton) menuButton.setAttribute("aria-expanded", String(open));
 }
 function closeMobileNavigation() { setMobileNavigation(false); }
-function close() { root.innerHTML = ""; session = test = cardDeck = null; window.LexoraFlashcards?.clearSession?.(); }
+function close() { root.innerHTML = ""; session = test = cardDeck = null; window.LexoraFlashcards?.clearSession?.(); window.LexoraReadingLab?.clearSession?.(); }
 
 function taskVariants(w) {
   if (Array.isArray(w.tasks) && w.tasks.length) return w.tasks.filter((task) => task?.prompt && task?.options?.length >= 2);
