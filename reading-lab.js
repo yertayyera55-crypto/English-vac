@@ -22,6 +22,8 @@ function readingMarks(draft = readingDraft()) { return Array.isArray(draft?.mark
 function readingMarkTranslation(mark) { const word = readingMarkWord(mark); return String(word?.tr || mark?.translation || "").trim(); }
 function readingMarkDefinition(mark) { const word = readingMarkWord(mark); return String(word?.d || mark?.contextSense || mark?.definition || "").trim(); }
 function readingMarkMeaning(mark) { return String(readingMarkTranslation(mark) || mark?.note || readingMarkDefinition(mark) || "").trim(); }
+function readingMarkIsReady(mark) { return Boolean(readingMarkMeaning(mark)); }
+function unresolvedReadingMarks(draft = readingDraft()) { return readingMarks(draft).filter((mark) => !readingMarkIsReady(mark)); }
 function readingMarkSummary(mark) {
   const translation = readingMarkTranslation(mark), definition = readingMarkDefinition(mark);
   if (translation && definition && translation !== definition) return `${translation} · ${definition}`;
@@ -244,8 +246,11 @@ function renderReadingMarks() {
   if (!draft || !list) return;
   const marks = readingMarks(draft); if (count) count.textContent = marks.length;
   list.innerHTML = marks.length ? marks.map((mark) => { const word = readingMarkWord(mark), lookupReady = Boolean(readingMarkTranslation(mark) || readingMarkDefinition(mark)); return `<article class="reading-mark-row"><span class="reading-mark-swatch"></span><div><b>${esc(readingMarkLabel(mark))}</b><small>${esc(readingMarkSummary(mark))}</small></div><div>${word ? `<button class="reading-mark-note" data-action="reading-edit-mark" data-id="${mark.id}">Context</button>` : lookupReady ? `<button class="reading-mark-note" data-action="reading-edit-mark" data-id="${mark.id}">View</button>` : `<button class="reading-mark-lookup" data-action="reading-lookup" data-id="${mark.id}">Learn more</button>`}<button class="reading-mark-remove" data-action="reading-remove-mark" data-id="${mark.id}" aria-label="Remove ${esc(readingMarkLabel(mark))}">×</button></div></article>`; }).join("") : `<p class="reading-no-marks">Use the highlighter in the text. Your marked items will stay here.</p>`;
-  const review = root.querySelector('[data-action="reading-review"]'), clear = root.querySelector('[data-action="reading-clear-marks"]');
-  if (review) { review.disabled = !marks.length; review.textContent = `Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →`; }
+  const review = root.querySelector('[data-action="reading-review"]'), clear = root.querySelector('[data-action="reading-clear-marks"]'), unresolved = unresolvedReadingMarks(draft);
+  if (review) {
+    review.disabled = !marks.length || Boolean(unresolved.length);
+    review.textContent = unresolved.length ? `Use Learn more for ${unresolved.length} ${unresolved.length === 1 ? "item" : "items"} first` : `Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →`;
+  }
   if (clear) clear.disabled = !marks.length;
 }
 function updateReadingTokenStates() {
@@ -324,6 +329,8 @@ function saveReadingNote(markId) {
 }
 function startReadingReview() {
   const draft = readingDraft(), marks = readingMarks(draft); if (!marks.length) return notice("Mark something in the passage first.");
+  const unresolved = unresolvedReadingMarks(draft);
+  if (unresolved.length) return notice(`Open Learn more for ${unresolved.length} marked ${unresolved.length === 1 ? "item" : "items"} first, so every card has a clear meaning.`);
   readingFlow = { kind: "review", queue: shuffled(marks.map((mark) => mark.id)), index: 0, revealed: false, again: 0, learned: 0 };
   readingReviewView();
 }
@@ -333,7 +340,7 @@ function activeReadingMark() {
 }
 function readingReviewView() {
   const { draft, mark, word } = activeReadingMark(); if (!draft || !mark) return readingPassageView();
-  const total = readingFlow.queue.length, back = readingMarkMeaning(mark) || "Use the saved sentence context to infer the meaning.", context = word?.e || mark.context || "", label = word ? "MEANING" : mark.translation ? "TRANSLATION · THIS CONTEXT" : mark.note ? "YOUR NOTE" : "CONTEXT", definition = !word ? readingMarkDefinition(mark) : "";
+  const total = readingFlow.queue.length, back = readingMarkMeaning(mark), context = word?.e || mark.context || "", label = word ? "MEANING" : mark.translation ? "TRANSLATION · THIS CONTEXT" : "YOUR NOTE", definition = !word ? readingMarkDefinition(mark) : "";
   root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Review marked reading cards"><section class="modal reading-review-modal"><div class="session-top"><span class="session-label">READING REVIEW · ${total} ${total === 1 ? "CARD" : "CARDS"} IN THE LOOP</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress reading-progress"><i style="width:${Math.max(5, mark.known ? 100 : 0)}%"></i></div><div class="reading-review-body"><span class="step-tag reading-step-tag">FROM ${draft.source === "article" ? "YOUR ARTICLE" : "THE PASSAGE"}</span><button class="reading-review-card ${readingFlow.revealed ? "revealed" : ""}" data-action="reading-card-flip"><span class="reading-review-face reading-review-front"><small>MARKED TEXT</small><strong>${esc(readingMarkLabel(mark))}</strong><b>Tap to reveal the context and your note</b></span><span class="reading-review-face reading-review-back"><small>${label}</small><strong>${esc(back)}</strong>${definition && definition !== back ? `<span class="reading-card-definition">${esc(definition)}</span>` : ""}${context ? `<em>“${esc(context)}”</em>` : ""}<b>Decide whether it needs another round.</b></span></button><div class="flashcard-study-actions"><button class="flashcard-again" data-action="reading-rate" data-id="again" ${readingFlow.revealed ? "" : "disabled"}><span>1</span><b>Still learning</b><small>Repeat after two cards</small></button><button class="flashcard-known" data-action="reading-rate" data-id="known" ${readingFlow.revealed ? "" : "disabled"}><span>2</span><b>I know it</b><small>Return to the passage</small></button></div><p class="flashcard-shortcuts">Space — reveal · 1 — still learning · 2 — I know it</p></div></section></div>`;
 }
 function flipReadingCard() { if (!readingFlow || readingFlow.kind !== "review") return; readingFlow.revealed = !readingFlow.revealed; readingReviewView(); }
