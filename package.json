@@ -5,6 +5,6 @@
   "description": "A personal SAT and IELTS vocabulary learning workspace.",
   "scripts": {
     "start": "python3 -m http.server 4173",
-    "check": "node --check app.js"
+    "check": "node --check app.js && node --check reading-lab.js && node --check api/reading-lookup.js"
   }
 }

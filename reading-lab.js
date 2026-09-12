@@ -1,5 +1,9 @@
 let readingFlow = null;
 let readingSetup = { source: "vocabulary", collectionId: null, count: "8", title: "", article: "" };
+// A rendered document remains only in this browser tab. Keeping it out of the
+// workspace avoids putting a potentially large DOCX (and its images) in the
+// learner's Supabase data.
+let readingDocument = null;
 
 function makeReadingId(prefix = "reading") { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
 function readingDraft() {
@@ -15,6 +19,16 @@ function readingWords(draft = readingDraft()) {
 function readingMarkWord(mark) { return mark?.wordId ? app.words.find((word) => word.id === mark.wordId) : null; }
 function readingMarkLabel(mark) { return String(mark?.text || readingMarkWord(mark)?.w || "").trim(); }
 function readingMarks(draft = readingDraft()) { return Array.isArray(draft?.marks) ? draft.marks : []; }
+function readingMarkTranslation(mark) { const word = readingMarkWord(mark); return String(word?.tr || mark?.translation || "").trim(); }
+function readingMarkDefinition(mark) { const word = readingMarkWord(mark); return String(word?.d || mark?.contextSense || mark?.definition || "").trim(); }
+function readingMarkMeaning(mark) { return String(readingMarkTranslation(mark) || mark?.note || readingMarkDefinition(mark) || "").trim(); }
+function readingMarkIsReady(mark) { return Boolean(readingMarkMeaning(mark)); }
+function unresolvedReadingMarks(draft = readingDraft()) { return readingMarks(draft).filter((mark) => !readingMarkIsReady(mark)); }
+function readingMarkSummary(mark) {
+  const translation = readingMarkTranslation(mark), definition = readingMarkDefinition(mark);
+  if (translation && definition && translation !== definition) return `${translation} · ${definition}`;
+  return translation || definition || mark?.note || "Context saved · look it up when you are ready";
+}
 function normaliseReadingSelection(value) { return String(value || "").replace(/\s+/g, " ").replace(/^[\s“”"'`.,;:!?—–-]+|[\s“”"'`.,;:!?—–-]+$/g, "").trim(); }
 function escapeReadingRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function readingCurrentCollection() {
@@ -26,6 +40,57 @@ function saveReadingSetupFields() {
   readingSetup.count = document.querySelector("#reading-count")?.value || readingSetup.count;
   readingSetup.title = document.querySelector("#reading-article-title")?.value || readingSetup.title;
   readingSetup.article = document.querySelector("#reading-article-input")?.value || readingSetup.article;
+}
+function readingDocumentTitle(file) { return file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim() || "Untitled document"; }
+function readingDocumentIsOpen() { return Boolean(readingDocument?.html); }
+function plainReadingDocumentText(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+function snapshotReadingDocument() {
+  const article = root.querySelector("#reading-article");
+  if (readingDocument && article) readingDocument.html = article.innerHTML;
+}
+function removeReadingDocumentMark(markId) {
+  if (!readingDocument?.html) return;
+  const template = document.createElement("template"); template.innerHTML = readingDocument.html;
+  template.content.querySelectorAll(".reading-selection-mark").forEach((node) => {
+    if (node.dataset.markId === markId) node.replaceWith(document.createTextNode(node.textContent || ""));
+  });
+  readingDocument.html = template.innerHTML;
+}
+function sanitizeRenderedDocument(container) {
+  container.querySelectorAll("script, iframe, object, embed, form, input, button").forEach((node) => node.remove());
+  container.querySelectorAll("*").forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const value = String(attribute.value || "").trim().toLowerCase();
+      if (/^on/i.test(attribute.name) || ((attribute.name === "href" || attribute.name === "src") && value.startsWith("javascript:"))) node.removeAttribute(attribute.name);
+    });
+  });
+  container.querySelectorAll("a").forEach((link) => { link.target = "_blank"; link.rel = "noopener noreferrer"; });
+  container.querySelectorAll("img").forEach((image) => { image.loading = "lazy"; if (!image.alt) image.alt = "Document illustration"; });
+  return container.innerHTML;
+}
+function readingDocumentLoadingView(title) {
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Preparing document"><section class="modal reading-document-loading"><div class="reading-document-spinner" aria-hidden="true"></div><p class="eyebrow">DOCUMENT READER</p><h2>Preparing ${esc(title)}</h2><p>Keeping headings, equations, and illustrations in the reader…</p></section></div>`;
+}
+async function openReadingDocument(file) {
+  if (!window.JSZip || !window.docx?.renderAsync) return notice("The DOCX reader is still loading. Try again in a moment.");
+  if (file.size > 8 * 1024 * 1024) return notice("Choose a DOCX file smaller than 8 MB.");
+  saveReadingSetupFields(); readingDocument = null; readingFlow = { kind: "document-loading" }; readingDocumentLoadingView(file.name);
+  try {
+    const stage = document.createElement("div");
+    await window.docx.renderAsync(await file.arrayBuffer(), stage, stage, {
+      className: "docx", inWrapper: false, ignoreWidth: true, ignoreHeight: true, ignoreFonts: true,
+      breakPages: true, renderHeaders: false, renderFooters: false, renderFootnotes: true, renderEndnotes: true,
+      renderComments: false, renderAltChunks: false, useBase64URL: true,
+    });
+    const article = plainReadingDocumentText(stage.innerText);
+    if (article.length < 40) throw new Error("The document did not contain readable text.");
+    readingDocument = { name: file.name, html: sanitizeRenderedDocument(stage) };
+    app.readingLab = { id: makeReadingId("document"), source: "document", title: readingSetup.title.trim() || readingDocumentTitle(file), article, wordIds: [], marks: [], reviewedMarkIds: [] };
+    save(); readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView();
+  } catch (error) {
+    readingDocument = null; readingFlow = null; readingLabHub("article");
+    notice("This DOCX could not be opened. Try saving it again as a standard .docx file.");
+  }
 }
 function readingLabHub(mode = readingSetup.source) {
   readingSetup.source = mode;
@@ -41,13 +106,14 @@ function readingVocabularySetup(current) {
   return `<div class="reading-setup-body"><div class="reading-setup-field"><label class="field-label" for="reading-collection">VOCABULARY COLLECTION</label><select id="reading-collection">${app.collections.map((collection) => `<option value="${collection.id}" ${collection.id === current?.id ? "selected" : ""}>${esc(collection.name)} · ${collectionWords(collection.id).length} words</option>`).join("")}</select><p>${practice.length ? `${practice.length} words currently need practice. The passage can use those first.` : "All words in this collection are available for the reading passage."}</p></div><div class="reading-setup-field"><label class="field-label" for="reading-count">PASSAGE LENGTH</label><select id="reading-count"><option value="5" ${readingSetup.count === "5" ? "selected" : ""}>5 target words · quick reading</option><option value="8" ${readingSetup.count === "8" ? "selected" : ""}>8 target words · standard</option><option value="12" ${readingSetup.count === "12" ? "selected" : ""}>12 target words · extended</option><option value="all" ${readingSetup.count === "all" ? "selected" : ""}>All available words</option></select><p>Each target word appears in context and can be highlighted directly in the passage.</p></div><div class="reading-setup-footer"><span class="subtle-note">The passage is composed locally from your saved examples. No AI service or extra key is needed.</span><button class="modal-cta teal" data-action="reading-start-vocabulary" ${allWords.length ? "" : "disabled"}>Preview vocabulary →</button></div></div>`;
 }
 function readingArticleSetup() {
-  return `<div class="reading-setup-body reading-article-setup"><label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .txt or .md</label><input id="reading-article-file" type="file" accept=".txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">In the reader, select a word, phrase, or sentence with the cursor, then use the highlighter to add it to your review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Text is stored only in your private Lexora workspace.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
+  return `<div class="reading-setup-body reading-article-setup"><label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a document / plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .docx, .txt or .md</label><input id="reading-article-file" type="file" accept=".docx,.txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">DOCX opens as a black-on-white reading sheet and keeps headings, pictures, and supported equations. Select a word, phrase, or sentence to add it to review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Pasted text is saved privately. A DOCX stays only in this browser tab, while your marked cards are saved.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
 }
 function attachReadingArticleUploader() {
   const picker = document.querySelector("#reading-article-file");
   picker?.addEventListener("change", () => {
     const file = picker.files?.[0]; if (!file) return;
     saveReadingSetupFields();
+    if (/\.docx$/i.test(file.name)) { openReadingDocument(file); return; }
     if (file.size > 300000) return notice("Choose a text file under 300 KB.");
     const reader = new FileReader();
     reader.onload = () => {
@@ -112,6 +178,7 @@ function decorateCustomParagraph(paragraph, marks) {
   return parts.map((part) => part.marked ? `<mark class="reading-selection-mark" data-mark-id="${esc(part.id)}">${esc(part.text)}</mark>` : esc(part.text)).join("");
 }
 function readingPassageMarkup(draft) {
+  if (draft.source === "document") return readingDocumentIsOpen() ? readingDocument.html : `<div class="document-reupload"><h3>Re-upload this document to continue.</h3><p>Document files stay in this browser tab, so their pictures and formatting are never uploaded to your workspace.</p></div>`;
   if (draft.source === "article") return String(draft.article || "").split(/\n\s*\n/).filter(Boolean).map((paragraph) => `<p class="reading-paragraph">${decorateCustomParagraph(paragraph, readingMarks(draft))}</p>`).join("");
   const words = readingWords(draft), groups = [];
   for (let index = 0; index < words.length; index += 3) groups.push(words.slice(index, index + 3));
@@ -121,34 +188,69 @@ function readingPassageMarkup(draft) {
 }
 function readingPassageView() {
   const draft = readingDraft(); if (!draft) return readingLabHub();
+  if (draft.source === "document" && !readingDocumentIsOpen()) { readingLabHub("article"); return notice("Re-upload the DOCX to continue. Its review cards are still saved."); }
   if (!readingFlow || readingFlow.kind !== "passage") readingFlow = { kind: "passage", markerOn: true, selection: null };
   const marks = readingMarks(draft), reviewComplete = marks.length && marks.every((mark) => draft.reviewedMarkIds.includes(mark.id)), quizCount = readingQuizItems(draft).length;
   const readingTitle = draft.title || "Practice passage";
-  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${draft.source === "article" ? "MY ARTICLE" : "VOCABULARY PASSAGE"}</span><h2>${esc(readingTitle)}</h2></div><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><button id="reading-selection-add" class="secondary-action" data-action="reading-add-selection" disabled>+ Add selected text</button><span id="reading-selection-status">Select any word, phrase, or sentence to mark it.</span></div><div class="reading-room-grid"><article class="reading-article" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div></section></div>`;
+  const documentReader = draft.source === "document";
+  const sourceLabel = documentReader ? "DOCUMENT" : draft.source === "article" ? "MY ARTICLE" : "VOCABULARY PASSAGE";
+  const fullScreen = Boolean(document.fullscreenElement || readingFlow.immersive);
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal ${documentReader ? "document-room-modal" : ""} ${readingFlow.immersive ? "reading-room-fullscreen" : ""}"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${sourceLabel}</span><h2>${esc(readingTitle)}</h2></div><div class="reading-room-actions"><button class="reading-fullscreen-toggle" data-action="reading-toggle-fullscreen" aria-pressed="${fullScreen}" title="Read in full screen">${fullScreen ? "⛶ Exit full screen" : "⛶ Full screen"}</button><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><span id="reading-selection-status">Select text, then use the Highlight button that appears beside it.</span></div><div class="reading-room-grid"><article class="reading-article ${documentReader ? "document-article" : ""}" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div><div id="reading-selection-popover" class="reading-selection-popover" role="toolbar" aria-label="Selected text tools" aria-hidden="true"><button class="reading-selection-mark-button" data-action="reading-add-selection">▰ Highlight</button><button class="reading-selection-dismiss" data-action="reading-dismiss-selection" aria-label="Dismiss selected-text tools">×</button></div></section></div>`;
   renderReadingMarks(); attachReadingSelectionCapture(); updateReadingTokenStates();
+}
+function hideReadingSelectionPopover() {
+  const popover = root.querySelector("#reading-selection-popover");
+  if (popover) { popover.classList.remove("visible"); popover.setAttribute("aria-hidden", "true"); }
+}
+function showReadingSelectionPopover(range) {
+  const popover = root.querySelector("#reading-selection-popover"); if (!popover) return;
+  const rect = [...range.getClientRects()].at(-1) || range.getBoundingClientRect();
+  if (!rect?.width && !rect?.height) return;
+  const width = 142, height = 38;
+  const left = Math.max(10, Math.min(window.innerWidth - width - 10, rect.left + rect.width / 2 - width / 2));
+  const top = Math.max(10, rect.top - height - 9);
+  popover.style.left = `${Math.round(left)}px`; popover.style.top = `${Math.round(top)}px`;
+  popover.classList.add("visible"); popover.setAttribute("aria-hidden", "false");
+}
+async function toggleReadingFullscreen() {
+  const room = root.querySelector(".reading-room-modal"); if (!room || readingFlow?.kind !== "passage") return;
+  if (document.fullscreenElement) {
+    try { await document.exitFullscreen(); } catch { /* Fall back to the in-app reader mode. */ }
+    readingFlow.immersive = false; readingPassageView(); return;
+  }
+  if (room.requestFullscreen) {
+    try { await room.requestFullscreen(); readingFlow.immersive = false; return; } catch { /* Safari and some embedded browsers use the fallback below. */ }
+  }
+  readingFlow.immersive = !readingFlow.immersive; readingPassageView();
 }
 function attachReadingSelectionCapture() {
   const article = root.querySelector("#reading-article"); if (!article) return;
+  const popover = root.querySelector("#reading-selection-popover");
+  popover?.addEventListener("pointerdown", (event) => event.preventDefault());
   const capture = () => {
     if (!readingFlow?.markerOn) return;
     const selected = window.getSelection?.(), text = normaliseReadingSelection(selected?.toString());
-    if (!text || text.length > 280 || !selected?.rangeCount || !article.contains(selected.anchorNode) || !article.contains(selected.focusNode)) return;
+    if (!text || text.length > 280 || !selected?.rangeCount || !article.contains(selected.anchorNode) || !article.contains(selected.focusNode)) { hideReadingSelectionPopover(); return; }
     const all = normaliseReadingSelection(article.textContent), position = all.toLowerCase().indexOf(text.toLowerCase());
     readingFlow.selection = { text, context: position >= 0 ? all.slice(Math.max(0, position - 90), Math.min(all.length, position + text.length + 120)) : text, range: selected.getRangeAt(0).cloneRange() };
-    const button = root.querySelector("#reading-selection-add"), status = root.querySelector("#reading-selection-status");
-    if (button) { button.disabled = false; button.textContent = `+ Mark “${text.length > 26 ? `${text.slice(0, 26)}…` : text}”`; }
-    if (status) status.textContent = "Selection ready to add to review.";
+    showReadingSelectionPopover(readingFlow.selection.range);
+    const status = root.querySelector("#reading-selection-status");
+    if (status) status.textContent = "Highlight tool is next to your selection.";
   };
   article.addEventListener("pointerup", () => window.setTimeout(capture, 0));
   article.addEventListener("keyup", capture);
+  root.querySelector(".reading-room-modal")?.addEventListener("scroll", hideReadingSelectionPopover, { passive: true });
 }
 function renderReadingMarks() {
   const draft = readingDraft(), list = root.querySelector("#reading-mark-list"), count = root.querySelector("#reading-mark-count");
   if (!draft || !list) return;
   const marks = readingMarks(draft); if (count) count.textContent = marks.length;
-  list.innerHTML = marks.length ? marks.map((mark) => { const word = readingMarkWord(mark); return `<article class="reading-mark-row"><span class="reading-mark-swatch"></span><div><b>${esc(readingMarkLabel(mark))}</b><small>${word ? esc(word.d) : mark.note ? esc(mark.note) : "Context saved · add a note if useful"}</small></div><div><button class="reading-mark-note" data-action="reading-edit-mark" data-id="${mark.id}">${word ? "Context" : mark.note ? "Edit" : "Add note"}</button><button class="reading-mark-remove" data-action="reading-remove-mark" data-id="${mark.id}" aria-label="Remove ${esc(readingMarkLabel(mark))}">×</button></div></article>`; }).join("") : `<p class="reading-no-marks">Use the highlighter in the text. Your marked items will stay here.</p>`;
-  const review = root.querySelector('[data-action="reading-review"]'), clear = root.querySelector('[data-action="reading-clear-marks"]');
-  if (review) { review.disabled = !marks.length; review.textContent = `Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →`; }
+  list.innerHTML = marks.length ? marks.map((mark) => { const word = readingMarkWord(mark), lookupReady = Boolean(readingMarkTranslation(mark) || readingMarkDefinition(mark)); return `<article class="reading-mark-row"><span class="reading-mark-swatch"></span><div><b>${esc(readingMarkLabel(mark))}</b><small>${esc(readingMarkSummary(mark))}</small></div><div>${word ? `<button class="reading-mark-note" data-action="reading-edit-mark" data-id="${mark.id}">Context</button>` : lookupReady ? `<button class="reading-mark-note" data-action="reading-edit-mark" data-id="${mark.id}">View</button>` : `<button class="reading-mark-lookup" data-action="reading-lookup" data-id="${mark.id}">Learn more</button>`}<button class="reading-mark-remove" data-action="reading-remove-mark" data-id="${mark.id}" aria-label="Remove ${esc(readingMarkLabel(mark))}">×</button></div></article>`; }).join("") : `<p class="reading-no-marks">Use the highlighter in the text. Your marked items will stay here.</p>`;
+  const review = root.querySelector('[data-action="reading-review"]'), clear = root.querySelector('[data-action="reading-clear-marks"]'), unresolved = unresolvedReadingMarks(draft);
+  if (review) {
+    review.disabled = !marks.length || Boolean(unresolved.length);
+    review.textContent = unresolved.length ? `Use Learn more for ${unresolved.length} ${unresolved.length === 1 ? "item" : "items"} first` : `Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →`;
+  }
   if (clear) clear.disabled = !marks.length;
 }
 function updateReadingTokenStates() {
@@ -178,20 +280,52 @@ function addReadingSelection() {
       selected.range.surroundContents(highlight);
     } catch { /* The saved markup will restore complex cross-node selections. */ }
   }
-  readingFlow.selection = null; window.getSelection?.().removeAllRanges(); saveReadingDraft();
-  const button = root.querySelector("#reading-selection-add"), status = root.querySelector("#reading-selection-status");
-  if (button) { button.disabled = true; button.textContent = "+ Add selected text"; }
+  if (draft.source === "document") snapshotReadingDocument();
+  readingFlow.selection = null; window.getSelection?.().removeAllRanges(); hideReadingSelectionPopover(); saveReadingDraft();
+  const status = root.querySelector("#reading-selection-status");
   if (status) status.textContent = "Marked for review. Keep reading or add another selection.";
 }
 function removeReadingMark(markId) {
   const draft = readingDraft(); if (!draft) return;
+  if (draft.source === "document") removeReadingDocumentMark(markId);
   draft.marks = readingMarks(draft).filter((mark) => mark.id !== markId); draft.reviewedMarkIds = draft.reviewedMarkIds.filter((id) => id !== markId); saveReadingDraft();
 }
-function clearReadingMarks() { const draft = readingDraft(); if (!draft) return; draft.marks = []; draft.reviewedMarkIds = []; saveReadingDraft(); notice("Marked items cleared from this reading."); }
+function clearReadingMarks() {
+  const draft = readingDraft(); if (!draft) return;
+  if (draft.source === "document") readingMarks(draft).forEach((mark) => removeReadingDocumentMark(mark.id));
+  draft.marks = []; draft.reviewedMarkIds = []; saveReadingDraft(); notice("Marked items cleared from this reading.");
+}
+function readingLookupView(markId, error = "") {
+  const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId); if (!mark) return readingPassageView();
+  const pending = readingFlow?.kind === "lookup" && readingFlow.markId === markId && readingFlow.loading;
+  const translation = readingMarkTranslation(mark), definition = readingMarkDefinition(mark);
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal reading-lookup-modal"><button class="icon-button modal-close" data-action="reading-return-passage" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">CONTEXTUAL LOOKUP</p><h2>${esc(readingMarkLabel(mark))}</h2><p class="reading-context">“${esc(mark.context || "Context was not captured.")}”</p>${pending ? `<div class="reading-lookup-loading"><i></i><div><b>Finding the meaning in context…</b><span>Building a Russian translation and a focused study card.</span></div></div>` : error ? `<div class="reading-lookup-error"><b>Couldn’t complete the lookup.</b><span>${esc(error)}</span></div>` : `<div class="reading-lookup-result"><div><span>RUSSIAN TRANSLATION · IN THIS CONTEXT</span><strong>${esc(translation || "Translation was not found")}</strong></div><div><span>ENGLISH EXPLANATION${mark.partOfSpeech ? ` · ${esc(mark.partOfSpeech)}` : ""}</span><strong>${esc(definition || "An explanation was not found")}</strong></div>${mark.example ? `<p>Study cue: ${esc(mark.example)}</p>` : ""}</div>`}<div class="modal-footer"><span class="subtle-note">Only the selected text and its nearby context are sent for this lookup.</span>${pending ? "" : error ? `<button class="modal-cta teal" data-action="reading-lookup-retry" data-id="${mark.id}">Try again</button>` : `<button class="modal-cta teal" data-action="reading-edit-mark" data-id="${mark.id}">Save in review cards →</button>`}</div></div></section></div>`;
+}
+async function lookUpReadingMark(markId) {
+  const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId), query = readingMarkLabel(mark); if (!mark || !query) return;
+  readingFlow = { kind: "lookup", markId, loading: true }; readingLookupView(markId);
+  const controller = new AbortController(), timeout = window.setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch("/api/reading-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ text: query, context: String(mark.context || "").slice(0, 1500) }) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const fallback = response.status === 404 ? "The translation API is not deployed on this site yet." : "The lookup service is unavailable.";
+      throw new Error(payload?.error || fallback);
+    }
+    const translation = String(payload.translationRu || "").trim(), definition = String(payload.definitionEn || "").trim(), contextSense = String(payload.contextSense || "").trim();
+    if (!translation && !definition && !contextSense) throw new Error("The lookup service did not return study information.");
+    Object.assign(mark, { translation, definition, contextSense, partOfSpeech: String(payload.partOfSpeech || "").trim(), example: String(payload.studyCue || "").trim(), lookupAt: Date.now() });
+    save(); readingFlow = { kind: "lookup", markId, loading: false }; readingLookupView(markId);
+  } catch (error) {
+    readingFlow = { kind: "lookup", markId, loading: false };
+    const message = error?.name === "AbortError" ? "The lookup took longer than 15 seconds. Please try again." : String(error?.message || "Check your connection and try again.");
+    readingLookupView(markId, message);
+  } finally { window.clearTimeout(timeout); }
+}
 function readingNoteModal(markId) {
   const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId); if (!mark) return readingPassageView();
-  const word = readingMarkWord(mark), back = word ? word.d : mark.note || "";
-  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal reading-note-modal"><button class="icon-button modal-close" data-action="reading-return-passage" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">MARKED FROM READING</p><h2>${esc(readingMarkLabel(mark))}</h2><p class="reading-context">“${esc(mark.context || "Context was not captured.")}”</p><label class="field-label" for="reading-mark-note">${word ? "MEANING FROM YOUR WORD BANK" : "YOUR NOTE / TRANSLATION"}</label><textarea id="reading-mark-note" class="reading-mark-note-input" maxlength="500" placeholder="Write a short meaning, translation, or reminder…" ${word ? "readonly" : ""}>${esc(back)}</textarea><div class="modal-footer"><span class="subtle-note">${word ? "This word already has a saved definition." : "A note makes this selection into a clearer flashcard and quiz question."}</span><button class="modal-cta teal" data-action="reading-save-note" data-id="${mark.id}">${word ? "Back to passage" : "Save note"}</button></div></div></section></div>`;
+  const word = readingMarkWord(mark), translation = readingMarkTranslation(mark), definition = readingMarkDefinition(mark);
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal reading-note-modal"><button class="icon-button modal-close" data-action="reading-return-passage" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">MARKED FROM READING</p><h2>${esc(readingMarkLabel(mark))}</h2><p class="reading-context">“${esc(mark.context || "Context was not captured.")}”</p>${!word && (translation || definition) ? `<div class="reading-saved-lookup"><span>TRANSLATION</span><b>${esc(translation || "—")}</b>${definition ? `<small>${esc(definition)}</small>` : ""}</div>` : ""}<label class="field-label" for="reading-mark-note">${word ? "MEANING FROM YOUR WORD BANK" : translation ? "YOUR PERSONAL NOTE (OPTIONAL)" : "YOUR NOTE / TRANSLATION"}</label><textarea id="reading-mark-note" class="reading-mark-note-input" maxlength="500" placeholder="Write a short meaning, translation, or reminder…" ${word ? "readonly" : ""}>${esc(word ? definition : mark.note || "")}</textarea><div class="modal-footer"><span class="subtle-note">${word ? "This word already has a saved definition." : translation ? "The looked-up translation is already saved to your review card." : "A note makes this selection into a clearer flashcard and quiz question."}</span><button class="modal-cta teal" data-action="reading-save-note" data-id="${mark.id}">${word ? "Back to passage" : "Save note"}</button></div></div></section></div>`;
 }
 function saveReadingNote(markId) {
   const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId); if (!mark) return readingPassageView();
@@ -200,6 +334,8 @@ function saveReadingNote(markId) {
 }
 function startReadingReview() {
   const draft = readingDraft(), marks = readingMarks(draft); if (!marks.length) return notice("Mark something in the passage first.");
+  const unresolved = unresolvedReadingMarks(draft);
+  if (unresolved.length) return notice(`Open Learn more for ${unresolved.length} marked ${unresolved.length === 1 ? "item" : "items"} first, so every card has a clear meaning.`);
   readingFlow = { kind: "review", queue: shuffled(marks.map((mark) => mark.id)), index: 0, revealed: false, again: 0, learned: 0 };
   readingReviewView();
 }
@@ -209,8 +345,8 @@ function activeReadingMark() {
 }
 function readingReviewView() {
   const { draft, mark, word } = activeReadingMark(); if (!draft || !mark) return readingPassageView();
-  const total = readingFlow.queue.length, back = word ? word.d : mark.note || "Use the saved sentence context to infer the meaning.", context = word?.e || mark.context || "";
-  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Review marked reading cards"><section class="modal reading-review-modal"><div class="session-top"><span class="session-label">READING REVIEW · ${total} ${total === 1 ? "CARD" : "CARDS"} IN THE LOOP</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress reading-progress"><i style="width:${Math.max(5, mark.known ? 100 : 0)}%"></i></div><div class="reading-review-body"><span class="step-tag reading-step-tag">FROM ${draft.source === "article" ? "YOUR ARTICLE" : "THE PASSAGE"}</span><button class="reading-review-card ${readingFlow.revealed ? "revealed" : ""}" data-action="reading-card-flip"><span class="reading-review-face reading-review-front"><small>MARKED TEXT</small><strong>${esc(readingMarkLabel(mark))}</strong><b>Tap to reveal the context and your note</b></span><span class="reading-review-face reading-review-back"><small>${word ? "MEANING" : mark.note ? "YOUR NOTE" : "CONTEXT"}</small><strong>${esc(back)}</strong>${context ? `<em>“${esc(context)}”</em>` : ""}<b>Decide whether it needs another round.</b></span></button><div class="flashcard-study-actions"><button class="flashcard-again" data-action="reading-rate" data-id="again" ${readingFlow.revealed ? "" : "disabled"}><span>1</span><b>Still learning</b><small>Repeat after two cards</small></button><button class="flashcard-known" data-action="reading-rate" data-id="known" ${readingFlow.revealed ? "" : "disabled"}><span>2</span><b>I know it</b><small>Return to the passage</small></button></div><p class="flashcard-shortcuts">Space — reveal · 1 — still learning · 2 — I know it</p></div></section></div>`;
+  const total = readingFlow.queue.length, back = readingMarkMeaning(mark), context = word?.e || mark.context || "", label = word ? "MEANING" : mark.translation ? "TRANSLATION · THIS CONTEXT" : "YOUR NOTE", definition = !word ? readingMarkDefinition(mark) : "";
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Review marked reading cards"><section class="modal reading-review-modal"><div class="session-top"><span class="session-label">READING REVIEW · ${total} ${total === 1 ? "CARD" : "CARDS"} IN THE LOOP</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress reading-progress"><i style="width:${Math.max(5, mark.known ? 100 : 0)}%"></i></div><div class="reading-review-body"><span class="step-tag reading-step-tag">FROM ${draft.source === "article" ? "YOUR ARTICLE" : "THE PASSAGE"}</span><button class="reading-review-card ${readingFlow.revealed ? "revealed" : ""}" data-action="reading-card-flip"><span class="reading-review-face reading-review-front"><small>MARKED TEXT</small><strong>${esc(readingMarkLabel(mark))}</strong><b>Tap to reveal the context and your note</b></span><span class="reading-review-face reading-review-back"><small>${label}</small><strong>${esc(back)}</strong>${definition && definition !== back ? `<span class="reading-card-definition">${esc(definition)}</span>` : ""}${context ? `<em>“${esc(context)}”</em>` : ""}<b>Decide whether it needs another round.</b></span></button><div class="flashcard-study-actions"><button class="flashcard-again" data-action="reading-rate" data-id="again" ${readingFlow.revealed ? "" : "disabled"}><span>1</span><b>Still learning</b><small>Repeat after two cards</small></button><button class="flashcard-known" data-action="reading-rate" data-id="known" ${readingFlow.revealed ? "" : "disabled"}><span>2</span><b>I know it</b><small>Return to the passage</small></button></div><p class="flashcard-shortcuts">Space — reveal · 1 — still learning · 2 — I know it</p></div></section></div>`;
 }
 function flipReadingCard() { if (!readingFlow || readingFlow.kind !== "review") return; readingFlow.revealed = !readingFlow.revealed; readingReviewView(); }
 function rateReadingCard(result) {
@@ -230,7 +366,7 @@ function readingReviewResult() {
 }
 function readingQuizItems(draft = readingDraft()) {
   const marks = readingMarks(draft), source = marks.length ? marks : readingWords(draft).map((word) => ({ id: `word-${word.id}`, text: word.w, wordId: word.id, note: "", context: word.e }));
-  return source.map((mark) => { const word = readingMarkWord(mark), answer = word?.d || mark.note; return answer ? { mark, word, answer } : null; }).filter(Boolean);
+  return source.map((mark) => { const word = readingMarkWord(mark), answer = readingMarkMeaning(mark); return answer ? { mark, word, answer } : null; }).filter(Boolean);
 }
 function startReadingQuiz() {
   const draft = readingDraft(), marks = readingMarks(draft);
@@ -272,15 +408,23 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]"); if (!button) return;
   const action = button.dataset.action, id = button.dataset.id;
   if (action === "reading-lab") readingLabHub();
-  if (action === "reading-resume") readingDraft()?.source === "vocabulary" && !readingFlow ? readingPreviewView() : readingPassageView();
+  if (action === "reading-resume") {
+    const draft = readingDraft();
+    if (draft?.source === "document" && !readingDocumentIsOpen()) { readingLabHub("article"); notice("Re-upload the DOCX to continue. Its review cards are still saved."); }
+    else if (draft?.source === "vocabulary" && !readingFlow) readingPreviewView();
+    else readingPassageView();
+  }
   if (action === "reading-source") { saveReadingSetupFields(); readingLabHub(id); }
   if (action === "reading-start-vocabulary") createReadingDraft("vocabulary");
   if (action === "reading-start-article") createReadingDraft("article");
   if (action === "reading-preview-next") { readingFlow.index += 1; readingPreviewView(); }
   if (action === "reading-open-passage" || action === "reading-return-passage") { readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView(); }
   if (action === "reading-toggle-marker") { if (readingFlow?.kind !== "passage") return; readingFlow.markerOn = !readingFlow.markerOn; readingPassageView(); }
+  if (action === "reading-toggle-fullscreen") toggleReadingFullscreen();
   if (action === "reading-toggle-word") { if (!readingFlow?.markerOn) return notice("Turn on the highlighter to mark a target word."); addReadingWordMark(id); }
   if (action === "reading-add-selection") addReadingSelection();
+  if (action === "reading-dismiss-selection") { readingFlow.selection = null; window.getSelection?.().removeAllRanges(); hideReadingSelectionPopover(); }
+  if (action === "reading-lookup" || action === "reading-lookup-retry") lookUpReadingMark(id);
   if (action === "reading-edit-mark") readingNoteModal(id);
   if (action === "reading-save-note") saveReadingNote(id);
   if (action === "reading-remove-mark") removeReadingMark(id);
@@ -300,4 +444,10 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "2") { event.preventDefault(); rateReadingCard("known"); }
   }
 });
-window.LexoraReadingLab = { clearSession: () => { readingFlow = null; } };
+document.addEventListener("fullscreenchange", () => {
+  const button = root.querySelector('[data-action="reading-toggle-fullscreen"]');
+  if (!button || readingFlow?.kind !== "passage") return;
+  const fullScreen = Boolean(document.fullscreenElement || readingFlow.immersive);
+  button.setAttribute("aria-pressed", String(fullScreen)); button.textContent = fullScreen ? "⛶ Exit full screen" : "⛶ Full screen";
+});
+window.LexoraReadingLab = { clearSession: () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); readingFlow = null; } };
