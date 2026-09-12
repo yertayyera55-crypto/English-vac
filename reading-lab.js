@@ -1,5 +1,9 @@
 let readingFlow = null;
 let readingSetup = { source: "vocabulary", collectionId: null, count: "8", title: "", article: "" };
+// A rendered document remains only in this browser tab. Keeping it out of the
+// workspace avoids putting a potentially large DOCX (and its images) in the
+// learner's Supabase data.
+let readingDocument = null;
 
 function makeReadingId(prefix = "reading") { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
 function readingDraft() {
@@ -35,6 +39,57 @@ function saveReadingSetupFields() {
   readingSetup.title = document.querySelector("#reading-article-title")?.value || readingSetup.title;
   readingSetup.article = document.querySelector("#reading-article-input")?.value || readingSetup.article;
 }
+function readingDocumentTitle(file) { return file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim() || "Untitled document"; }
+function readingDocumentIsOpen() { return Boolean(readingDocument?.html); }
+function plainReadingDocumentText(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+function snapshotReadingDocument() {
+  const article = root.querySelector("#reading-article");
+  if (readingDocument && article) readingDocument.html = article.innerHTML;
+}
+function removeReadingDocumentMark(markId) {
+  if (!readingDocument?.html) return;
+  const template = document.createElement("template"); template.innerHTML = readingDocument.html;
+  template.content.querySelectorAll(".reading-selection-mark").forEach((node) => {
+    if (node.dataset.markId === markId) node.replaceWith(document.createTextNode(node.textContent || ""));
+  });
+  readingDocument.html = template.innerHTML;
+}
+function sanitizeRenderedDocument(container) {
+  container.querySelectorAll("script, iframe, object, embed, form, input, button").forEach((node) => node.remove());
+  container.querySelectorAll("*").forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const value = String(attribute.value || "").trim().toLowerCase();
+      if (/^on/i.test(attribute.name) || ((attribute.name === "href" || attribute.name === "src") && value.startsWith("javascript:"))) node.removeAttribute(attribute.name);
+    });
+  });
+  container.querySelectorAll("a").forEach((link) => { link.target = "_blank"; link.rel = "noopener noreferrer"; });
+  container.querySelectorAll("img").forEach((image) => { image.loading = "lazy"; if (!image.alt) image.alt = "Document illustration"; });
+  return container.innerHTML;
+}
+function readingDocumentLoadingView(title) {
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Preparing document"><section class="modal reading-document-loading"><div class="reading-document-spinner" aria-hidden="true"></div><p class="eyebrow">DOCUMENT READER</p><h2>Preparing ${esc(title)}</h2><p>Keeping headings, equations, and illustrations in the reader…</p></section></div>`;
+}
+async function openReadingDocument(file) {
+  if (!window.JSZip || !window.docx?.renderAsync) return notice("The DOCX reader is still loading. Try again in a moment.");
+  if (file.size > 8 * 1024 * 1024) return notice("Choose a DOCX file smaller than 8 MB.");
+  saveReadingSetupFields(); readingDocument = null; readingFlow = { kind: "document-loading" }; readingDocumentLoadingView(file.name);
+  try {
+    const stage = document.createElement("div");
+    await window.docx.renderAsync(await file.arrayBuffer(), stage, stage, {
+      className: "docx", inWrapper: false, ignoreWidth: true, ignoreHeight: true, ignoreFonts: true,
+      breakPages: true, renderHeaders: false, renderFooters: false, renderFootnotes: true, renderEndnotes: true,
+      renderComments: false, renderAltChunks: false, useBase64URL: true,
+    });
+    const article = plainReadingDocumentText(stage.innerText);
+    if (article.length < 40) throw new Error("The document did not contain readable text.");
+    readingDocument = { name: file.name, html: sanitizeRenderedDocument(stage) };
+    app.readingLab = { id: makeReadingId("document"), source: "document", title: readingSetup.title.trim() || readingDocumentTitle(file), article, wordIds: [], marks: [], reviewedMarkIds: [] };
+    save(); readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView();
+  } catch (error) {
+    readingDocument = null; readingFlow = null; readingLabHub("article");
+    notice("This DOCX could not be opened. Try saving it again as a standard .docx file.");
+  }
+}
 function readingLabHub(mode = readingSetup.source) {
   readingSetup.source = mode;
   const current = readingCurrentCollection();
@@ -49,13 +104,14 @@ function readingVocabularySetup(current) {
   return `<div class="reading-setup-body"><div class="reading-setup-field"><label class="field-label" for="reading-collection">VOCABULARY COLLECTION</label><select id="reading-collection">${app.collections.map((collection) => `<option value="${collection.id}" ${collection.id === current?.id ? "selected" : ""}>${esc(collection.name)} · ${collectionWords(collection.id).length} words</option>`).join("")}</select><p>${practice.length ? `${practice.length} words currently need practice. The passage can use those first.` : "All words in this collection are available for the reading passage."}</p></div><div class="reading-setup-field"><label class="field-label" for="reading-count">PASSAGE LENGTH</label><select id="reading-count"><option value="5" ${readingSetup.count === "5" ? "selected" : ""}>5 target words · quick reading</option><option value="8" ${readingSetup.count === "8" ? "selected" : ""}>8 target words · standard</option><option value="12" ${readingSetup.count === "12" ? "selected" : ""}>12 target words · extended</option><option value="all" ${readingSetup.count === "all" ? "selected" : ""}>All available words</option></select><p>Each target word appears in context and can be highlighted directly in the passage.</p></div><div class="reading-setup-footer"><span class="subtle-note">The passage is composed locally from your saved examples. No AI service or extra key is needed.</span><button class="modal-cta teal" data-action="reading-start-vocabulary" ${allWords.length ? "" : "disabled"}>Preview vocabulary →</button></div></div>`;
 }
 function readingArticleSetup() {
-  return `<div class="reading-setup-body reading-article-setup"><label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .txt or .md</label><input id="reading-article-file" type="file" accept=".txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">In the reader, select a word, phrase, or sentence with the cursor, then use the highlighter to add it to your review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Text is stored only in your private Lexora workspace.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
+  return `<div class="reading-setup-body reading-article-setup"><label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a document / plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .docx, .txt or .md</label><input id="reading-article-file" type="file" accept=".docx,.txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">DOCX opens as a black-on-white reading sheet and keeps headings, pictures, and supported equations. Select a word, phrase, or sentence to add it to review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Pasted text is saved privately. A DOCX stays only in this browser tab, while your marked cards are saved.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
 }
 function attachReadingArticleUploader() {
   const picker = document.querySelector("#reading-article-file");
   picker?.addEventListener("change", () => {
     const file = picker.files?.[0]; if (!file) return;
     saveReadingSetupFields();
+    if (/\.docx$/i.test(file.name)) { openReadingDocument(file); return; }
     if (file.size > 300000) return notice("Choose a text file under 300 KB.");
     const reader = new FileReader();
     reader.onload = () => {
@@ -120,6 +176,7 @@ function decorateCustomParagraph(paragraph, marks) {
   return parts.map((part) => part.marked ? `<mark class="reading-selection-mark" data-mark-id="${esc(part.id)}">${esc(part.text)}</mark>` : esc(part.text)).join("");
 }
 function readingPassageMarkup(draft) {
+  if (draft.source === "document") return readingDocumentIsOpen() ? readingDocument.html : `<div class="document-reupload"><h3>Re-upload this document to continue.</h3><p>Document files stay in this browser tab, so their pictures and formatting are never uploaded to your workspace.</p></div>`;
   if (draft.source === "article") return String(draft.article || "").split(/\n\s*\n/).filter(Boolean).map((paragraph) => `<p class="reading-paragraph">${decorateCustomParagraph(paragraph, readingMarks(draft))}</p>`).join("");
   const words = readingWords(draft), groups = [];
   for (let index = 0; index < words.length; index += 3) groups.push(words.slice(index, index + 3));
@@ -129,10 +186,13 @@ function readingPassageMarkup(draft) {
 }
 function readingPassageView() {
   const draft = readingDraft(); if (!draft) return readingLabHub();
+  if (draft.source === "document" && !readingDocumentIsOpen()) { readingLabHub("article"); return notice("Re-upload the DOCX to continue. Its review cards are still saved."); }
   if (!readingFlow || readingFlow.kind !== "passage") readingFlow = { kind: "passage", markerOn: true, selection: null };
   const marks = readingMarks(draft), reviewComplete = marks.length && marks.every((mark) => draft.reviewedMarkIds.includes(mark.id)), quizCount = readingQuizItems(draft).length;
   const readingTitle = draft.title || "Practice passage";
-  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${draft.source === "article" ? "MY ARTICLE" : "VOCABULARY PASSAGE"}</span><h2>${esc(readingTitle)}</h2></div><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><button id="reading-selection-add" class="secondary-action" data-action="reading-add-selection" disabled>+ Add selected text</button><span id="reading-selection-status">Select any word, phrase, or sentence to mark it.</span></div><div class="reading-room-grid"><article class="reading-article" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div></section></div>`;
+  const documentReader = draft.source === "document";
+  const sourceLabel = documentReader ? "DOCUMENT" : draft.source === "article" ? "MY ARTICLE" : "VOCABULARY PASSAGE";
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal ${documentReader ? "document-room-modal" : ""}"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${sourceLabel}</span><h2>${esc(readingTitle)}</h2></div><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><button id="reading-selection-add" class="secondary-action" data-action="reading-add-selection" disabled>+ Add selected text</button><span id="reading-selection-status">Select any word, phrase, or sentence to mark it.</span></div><div class="reading-room-grid"><article class="reading-article ${documentReader ? "document-article" : ""}" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div></section></div>`;
   renderReadingMarks(); attachReadingSelectionCapture(); updateReadingTokenStates();
 }
 function attachReadingSelectionCapture() {
@@ -186,6 +246,7 @@ function addReadingSelection() {
       selected.range.surroundContents(highlight);
     } catch { /* The saved markup will restore complex cross-node selections. */ }
   }
+  if (draft.source === "document") snapshotReadingDocument();
   readingFlow.selection = null; window.getSelection?.().removeAllRanges(); saveReadingDraft();
   const button = root.querySelector("#reading-selection-add"), status = root.querySelector("#reading-selection-status");
   if (button) { button.disabled = true; button.textContent = "+ Add selected text"; }
@@ -193,9 +254,14 @@ function addReadingSelection() {
 }
 function removeReadingMark(markId) {
   const draft = readingDraft(); if (!draft) return;
+  if (draft.source === "document") removeReadingDocumentMark(markId);
   draft.marks = readingMarks(draft).filter((mark) => mark.id !== markId); draft.reviewedMarkIds = draft.reviewedMarkIds.filter((id) => id !== markId); saveReadingDraft();
 }
-function clearReadingMarks() { const draft = readingDraft(); if (!draft) return; draft.marks = []; draft.reviewedMarkIds = []; saveReadingDraft(); notice("Marked items cleared from this reading."); }
+function clearReadingMarks() {
+  const draft = readingDraft(); if (!draft) return;
+  if (draft.source === "document") readingMarks(draft).forEach((mark) => removeReadingDocumentMark(mark.id));
+  draft.marks = []; draft.reviewedMarkIds = []; saveReadingDraft(); notice("Marked items cleared from this reading.");
+}
 function readingLookupView(markId, error = "") {
   const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId); if (!mark) return readingPassageView();
   const pending = readingFlow?.kind === "lookup" && readingFlow.markId === markId && readingFlow.loading;
@@ -302,7 +368,12 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]"); if (!button) return;
   const action = button.dataset.action, id = button.dataset.id;
   if (action === "reading-lab") readingLabHub();
-  if (action === "reading-resume") readingDraft()?.source === "vocabulary" && !readingFlow ? readingPreviewView() : readingPassageView();
+  if (action === "reading-resume") {
+    const draft = readingDraft();
+    if (draft?.source === "document" && !readingDocumentIsOpen()) { readingLabHub("article"); notice("Re-upload the DOCX to continue. Its review cards are still saved."); }
+    else if (draft?.source === "vocabulary" && !readingFlow) readingPreviewView();
+    else readingPassageView();
+  }
   if (action === "reading-source") { saveReadingSetupFields(); readingLabHub(id); }
   if (action === "reading-start-vocabulary") createReadingDraft("vocabulary");
   if (action === "reading-start-article") createReadingDraft("article");
