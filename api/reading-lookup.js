@@ -39,10 +39,12 @@ module.exports = async (req, res) => {
   const text = safeText(body.text, 280), context = safeText(body.context, 1500);
   if (!text || !context) return json(res, 400, { error: "Select text from a passage before looking it up." });
 
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 12_000);
   try {
     const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      signal: controller.signal,
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         temperature: 0.1,
@@ -54,12 +56,14 @@ module.exports = async (req, res) => {
         ],
       }),
     });
+    if (groqResponse.status === 429) return json(res, 429, { error: "The context service is busy. Please wait a moment and try again." });
     if (!groqResponse.ok) return json(res, 502, { error: "The context service is temporarily unavailable." });
     const groqPayload = await groqResponse.json(), output = groqPayload?.choices?.[0]?.message?.content;
     const result = parseModelJson(output);
     if (!result.translationRu || !result.definitionEn || comparableText(result.selectedText) !== comparableText(text)) return json(res, 502, { error: "The context service returned an incomplete or mismatched answer." });
     return json(res, 200, result);
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") return json(res, 504, { error: "The context service took too long to respond. Please try again." });
     return json(res, 502, { error: "The context service could not be reached." });
-  }
+  } finally { clearTimeout(timeout); }
 };

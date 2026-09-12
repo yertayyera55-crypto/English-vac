@@ -304,18 +304,20 @@ function readingLookupView(markId, error = "") {
 async function lookUpReadingMark(markId) {
   const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId), query = readingMarkLabel(mark); if (!mark || !query) return;
   readingFlow = { kind: "lookup", markId, loading: true }; readingLookupView(markId);
+  const controller = new AbortController(), timeout = window.setTimeout(() => controller.abort(), 15_000);
   try {
-    const response = await fetch("/api/reading-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: query, context: String(mark.context || "").slice(0, 1500) }) });
+    const response = await fetch("/api/reading-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ text: query, context: String(mark.context || "").slice(0, 1500) }) });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload?.error || "The lookup service is unavailable.");
     const translation = String(payload.translationRu || "").trim(), definition = String(payload.definitionEn || "").trim(), contextSense = String(payload.contextSense || "").trim();
     if (!translation && !definition && !contextSense) throw new Error("The lookup service did not return study information.");
     Object.assign(mark, { translation, definition, contextSense, partOfSpeech: String(payload.partOfSpeech || "").trim(), example: String(payload.studyCue || "").trim(), lookupAt: Date.now() });
     save(); readingFlow = { kind: "lookup", markId, loading: false }; readingLookupView(markId);
-  } catch {
+  } catch (error) {
     readingFlow = { kind: "lookup", markId, loading: false };
-    readingLookupView(markId, "Check your connection and try again. You can still add a personal note manually.");
-  }
+    const message = error?.name === "AbortError" ? "The lookup took longer than 15 seconds. Please try again." : String(error?.message || "Check your connection and try again.");
+    readingLookupView(markId, message);
+  } finally { window.clearTimeout(timeout); }
 }
 function readingNoteModal(markId) {
   const draft = readingDraft(), mark = readingMarks(draft).find((item) => item.id === markId); if (!mark) return readingPassageView();
