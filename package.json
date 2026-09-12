@@ -4,7 +4,9 @@
   "private": true,
   "description": "A personal SAT and IELTS vocabulary learning workspace.",
   "scripts": {
-    "start": "python3 -m http.server 4173",
-    "check": "node --check app.js && node --check reading-lab.js && node --check api/reading-lookup.js"
-  }
+    "start": "node server.js",
+    "check": "node --check app.js && node --check reading-lab.js && node --check api/reading-lookup.js && node --check server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": { "node": ">=22" }
 }
