@@ -33,11 +33,12 @@ function parseModelJson(content) {
 module.exports = async (req, res) => {
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed." });
   if (!requestIsAllowed(req)) return json(res, 429, { error: "Please wait a moment before another lookup." });
-  if (!process.env.GROQ_API_KEY) return json(res, 503, { error: "Context lookup is not configured yet." });
+  if (!process.env.GROQ_API_KEY) { console.warn("[reading-lookup] missing GROQ_API_KEY"); return json(res, 503, { error: "Context lookup is not configured yet." }); }
 
   const body = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })() : req.body || {};
   const text = safeText(body.text, 280), context = safeText(body.context, 1500);
   if (!text || !context) return json(res, 400, { error: "Select text from a passage before looking it up." });
+  console.info("[reading-lookup] request", { selectedLength: text.length, contextLength: context.length });
 
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 12_000);
   try {
@@ -56,14 +57,16 @@ module.exports = async (req, res) => {
         ],
       }),
     });
-    if (groqResponse.status === 429) return json(res, 429, { error: "The context service is busy. Please wait a moment and try again." });
-    if (!groqResponse.ok) return json(res, 502, { error: "The context service is temporarily unavailable." });
+    if (groqResponse.status === 429) { console.warn("[reading-lookup] Groq rate limited request"); return json(res, 429, { error: "The context service is busy. Please wait a moment and try again." }); }
+    if (!groqResponse.ok) { console.error("[reading-lookup] Groq request failed", { status: groqResponse.status }); return json(res, 502, { error: "The context service is temporarily unavailable." }); }
     const groqPayload = await groqResponse.json(), output = groqPayload?.choices?.[0]?.message?.content;
     const result = parseModelJson(output);
-    if (!result.translationRu || !result.definitionEn || comparableText(result.selectedText) !== comparableText(text)) return json(res, 502, { error: "The context service returned an incomplete or mismatched answer." });
+    if (!result.translationRu || !result.definitionEn || comparableText(result.selectedText) !== comparableText(text)) { console.warn("[reading-lookup] invalid structured response"); return json(res, 502, { error: "The context service returned an incomplete or mismatched answer." }); }
+    console.info("[reading-lookup] success");
     return json(res, 200, result);
   } catch (error) {
-    if (error?.name === "AbortError") return json(res, 504, { error: "The context service took too long to respond. Please try again." });
+    if (error?.name === "AbortError") { console.warn("[reading-lookup] Groq request timed out"); return json(res, 504, { error: "The context service took too long to respond. Please try again." }); }
+    console.error("[reading-lookup] request failed", { name: error?.name || "Error", message: String(error?.message || "unknown") });
     return json(res, 502, { error: "The context service could not be reached." });
   } finally { clearTimeout(timeout); }
 };

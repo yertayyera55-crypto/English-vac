@@ -308,7 +308,10 @@ async function lookUpReadingMark(markId) {
   try {
     const response = await fetch("/api/reading-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ text: query, context: String(mark.context || "").slice(0, 1500) }) });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error || "The lookup service is unavailable.");
+    if (!response.ok) {
+      const fallback = response.status === 404 ? "The translation API is not deployed on this site yet." : "The lookup service is unavailable.";
+      throw new Error(payload?.error || fallback);
+    }
     const translation = String(payload.translationRu || "").trim(), definition = String(payload.definitionEn || "").trim(), contextSense = String(payload.contextSense || "").trim();
     if (!translation && !definition && !contextSense) throw new Error("The lookup service did not return study information.");
     Object.assign(mark, { translation, definition, contextSense, partOfSpeech: String(payload.partOfSpeech || "").trim(), example: String(payload.studyCue || "").trim(), lookupAt: Date.now() });
