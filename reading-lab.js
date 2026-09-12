@@ -192,23 +192,52 @@ function readingPassageView() {
   const readingTitle = draft.title || "Practice passage";
   const documentReader = draft.source === "document";
   const sourceLabel = documentReader ? "DOCUMENT" : draft.source === "article" ? "MY ARTICLE" : "VOCABULARY PASSAGE";
-  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal ${documentReader ? "document-room-modal" : ""}"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${sourceLabel}</span><h2>${esc(readingTitle)}</h2></div><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><button id="reading-selection-add" class="secondary-action" data-action="reading-add-selection" disabled>+ Add selected text</button><span id="reading-selection-status">Select any word, phrase, or sentence to mark it.</span></div><div class="reading-room-grid"><article class="reading-article ${documentReader ? "document-article" : ""}" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div></section></div>`;
+  const fullScreen = Boolean(document.fullscreenElement || readingFlow.immersive);
+  root.innerHTML = `<div class="overlay reading-overlay" role="dialog" aria-modal="true" aria-label="Reading Lab passage"><section class="modal reading-room-modal ${documentReader ? "document-room-modal" : ""} ${readingFlow.immersive ? "reading-room-fullscreen" : ""}"><div class="reading-room-top"><div><span class="session-label">READING LAB · ${sourceLabel}</span><h2>${esc(readingTitle)}</h2></div><div class="reading-room-actions"><button class="reading-fullscreen-toggle" data-action="reading-toggle-fullscreen" aria-pressed="${fullScreen}" title="Read in full screen">${fullScreen ? "⛶ Exit full screen" : "⛶ Full screen"}</button><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div></div><div class="reading-toolbar"><button class="reading-marker-toggle ${readingFlow.markerOn ? "on" : ""}" data-action="reading-toggle-marker" aria-pressed="${readingFlow.markerOn}">▰ Highlighter: ${readingFlow.markerOn ? "on" : "off"}</button><span id="reading-selection-status">Select text, then use the Highlight button that appears beside it.</span></div><div class="reading-room-grid"><article class="reading-article ${documentReader ? "document-article" : ""}" id="reading-article" tabindex="0">${readingPassageMarkup(draft)}</article><aside class="reading-inspector"><div class="reading-inspector-heading"><span>MARKED FOR REVIEW</span><b id="reading-mark-count">${marks.length}</b></div><p class="reading-inspector-note">Highlighted items become focused cards. Add a note or translation for phrases from your own article.</p><div id="reading-mark-list" class="reading-mark-list"></div><div class="reading-inspector-actions"><button class="secondary-action" data-action="reading-clear-marks" ${marks.length ? "" : "disabled"}>Clear marks</button><button class="modal-cta teal" data-action="reading-review" ${marks.length ? "" : "disabled"}>Review ${marks.length || ""} marked ${marks.length === 1 ? "item" : "items"} →</button><button class="reading-quiz-button" data-action="reading-quiz-start" ${(!quizCount || (marks.length && !reviewComplete)) ? "disabled" : ""}>${marks.length && !reviewComplete ? "Review cards before quiz" : "I reread it — start mini quiz →"}</button></div></aside></div><div id="reading-selection-popover" class="reading-selection-popover" role="toolbar" aria-label="Selected text tools" aria-hidden="true"><button class="reading-selection-mark-button" data-action="reading-add-selection">▰ Highlight</button><button class="reading-selection-dismiss" data-action="reading-dismiss-selection" aria-label="Dismiss selected-text tools">×</button></div></section></div>`;
   renderReadingMarks(); attachReadingSelectionCapture(); updateReadingTokenStates();
+}
+function hideReadingSelectionPopover() {
+  const popover = root.querySelector("#reading-selection-popover");
+  if (popover) { popover.classList.remove("visible"); popover.setAttribute("aria-hidden", "true"); }
+}
+function showReadingSelectionPopover(range) {
+  const popover = root.querySelector("#reading-selection-popover"); if (!popover) return;
+  const rect = [...range.getClientRects()].at(-1) || range.getBoundingClientRect();
+  if (!rect?.width && !rect?.height) return;
+  const width = 142, height = 38;
+  const left = Math.max(10, Math.min(window.innerWidth - width - 10, rect.left + rect.width / 2 - width / 2));
+  const top = Math.max(10, rect.top - height - 9);
+  popover.style.left = `${Math.round(left)}px`; popover.style.top = `${Math.round(top)}px`;
+  popover.classList.add("visible"); popover.setAttribute("aria-hidden", "false");
+}
+async function toggleReadingFullscreen() {
+  const room = root.querySelector(".reading-room-modal"); if (!room || readingFlow?.kind !== "passage") return;
+  if (document.fullscreenElement) {
+    try { await document.exitFullscreen(); } catch { /* Fall back to the in-app reader mode. */ }
+    readingFlow.immersive = false; readingPassageView(); return;
+  }
+  if (room.requestFullscreen) {
+    try { await room.requestFullscreen(); readingFlow.immersive = false; return; } catch { /* Safari and some embedded browsers use the fallback below. */ }
+  }
+  readingFlow.immersive = !readingFlow.immersive; readingPassageView();
 }
 function attachReadingSelectionCapture() {
   const article = root.querySelector("#reading-article"); if (!article) return;
+  const popover = root.querySelector("#reading-selection-popover");
+  popover?.addEventListener("pointerdown", (event) => event.preventDefault());
   const capture = () => {
     if (!readingFlow?.markerOn) return;
     const selected = window.getSelection?.(), text = normaliseReadingSelection(selected?.toString());
-    if (!text || text.length > 280 || !selected?.rangeCount || !article.contains(selected.anchorNode) || !article.contains(selected.focusNode)) return;
+    if (!text || text.length > 280 || !selected?.rangeCount || !article.contains(selected.anchorNode) || !article.contains(selected.focusNode)) { hideReadingSelectionPopover(); return; }
     const all = normaliseReadingSelection(article.textContent), position = all.toLowerCase().indexOf(text.toLowerCase());
     readingFlow.selection = { text, context: position >= 0 ? all.slice(Math.max(0, position - 90), Math.min(all.length, position + text.length + 120)) : text, range: selected.getRangeAt(0).cloneRange() };
-    const button = root.querySelector("#reading-selection-add"), status = root.querySelector("#reading-selection-status");
-    if (button) { button.disabled = false; button.textContent = `+ Mark “${text.length > 26 ? `${text.slice(0, 26)}…` : text}”`; }
-    if (status) status.textContent = "Selection ready to add to review.";
+    showReadingSelectionPopover(readingFlow.selection.range);
+    const status = root.querySelector("#reading-selection-status");
+    if (status) status.textContent = "Highlight tool is next to your selection.";
   };
   article.addEventListener("pointerup", () => window.setTimeout(capture, 0));
   article.addEventListener("keyup", capture);
+  root.querySelector(".reading-room-modal")?.addEventListener("scroll", hideReadingSelectionPopover, { passive: true });
 }
 function renderReadingMarks() {
   const draft = readingDraft(), list = root.querySelector("#reading-mark-list"), count = root.querySelector("#reading-mark-count");
@@ -247,9 +276,8 @@ function addReadingSelection() {
     } catch { /* The saved markup will restore complex cross-node selections. */ }
   }
   if (draft.source === "document") snapshotReadingDocument();
-  readingFlow.selection = null; window.getSelection?.().removeAllRanges(); saveReadingDraft();
-  const button = root.querySelector("#reading-selection-add"), status = root.querySelector("#reading-selection-status");
-  if (button) { button.disabled = true; button.textContent = "+ Add selected text"; }
+  readingFlow.selection = null; window.getSelection?.().removeAllRanges(); hideReadingSelectionPopover(); saveReadingDraft();
+  const status = root.querySelector("#reading-selection-status");
   if (status) status.textContent = "Marked for review. Keep reading or add another selection.";
 }
 function removeReadingMark(markId) {
@@ -380,8 +408,10 @@ document.addEventListener("click", (event) => {
   if (action === "reading-preview-next") { readingFlow.index += 1; readingPreviewView(); }
   if (action === "reading-open-passage" || action === "reading-return-passage") { readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView(); }
   if (action === "reading-toggle-marker") { if (readingFlow?.kind !== "passage") return; readingFlow.markerOn = !readingFlow.markerOn; readingPassageView(); }
+  if (action === "reading-toggle-fullscreen") toggleReadingFullscreen();
   if (action === "reading-toggle-word") { if (!readingFlow?.markerOn) return notice("Turn on the highlighter to mark a target word."); addReadingWordMark(id); }
   if (action === "reading-add-selection") addReadingSelection();
+  if (action === "reading-dismiss-selection") { readingFlow.selection = null; window.getSelection?.().removeAllRanges(); hideReadingSelectionPopover(); }
   if (action === "reading-lookup" || action === "reading-lookup-retry") lookUpReadingMark(id);
   if (action === "reading-edit-mark") readingNoteModal(id);
   if (action === "reading-save-note") saveReadingNote(id);
@@ -402,4 +432,10 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "2") { event.preventDefault(); rateReadingCard("known"); }
   }
 });
-window.LexoraReadingLab = { clearSession: () => { readingFlow = null; } };
+document.addEventListener("fullscreenchange", () => {
+  const button = root.querySelector('[data-action="reading-toggle-fullscreen"]');
+  if (!button || readingFlow?.kind !== "passage") return;
+  const fullScreen = Boolean(document.fullscreenElement || readingFlow.immersive);
+  button.setAttribute("aria-pressed", String(fullScreen)); button.textContent = fullScreen ? "⛶ Exit full screen" : "⛶ Full screen";
+});
+window.LexoraReadingLab = { clearSession: () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); readingFlow = null; } };
