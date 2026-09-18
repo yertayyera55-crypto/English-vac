@@ -8,7 +8,7 @@ const envFile = path.join(__dirname, ".env.local");
 if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
 
 const assets = new Set(["index.html", "styles.css", "app.js", "reading-lab.js", "flashcards.js", "importer.js", "supabase-config.js"]);
-const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 
 function createServer() {
   return http.createServer(async (req, res) => {
@@ -33,7 +33,7 @@ function createServer() {
     if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405).end(); return; }
     const asset = pathname === "/" ? "index.html" : pathname.slice(1);
     // Never serve .env.local, .git, or server code.
-    if (!assets.has(asset) && !/^vendor\/[\w-]+\.js$/.test(asset)) { res.writeHead(404).end("Not found"); return; }
+    if (!assets.has(asset) && !/^vendor\/[\w-]+\.js$/.test(asset) && !/^vendor\/pdfjs\/(?:pdf(?:\.worker)?\.min\.mjs|cmaps\/[\w-]+\.bcmap)$/.test(asset)) { res.writeHead(404).end("Not found"); return; }
     try {
       const contents = await fs.promises.readFile(path.join(__dirname, asset));
       res.writeHead(200, { "Content-Type": types[path.extname(asset)] || "application/octet-stream", "Cache-Control": "no-cache" });

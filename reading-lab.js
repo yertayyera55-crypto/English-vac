@@ -90,6 +90,74 @@ async function openReadingDocument(file) {
     notice("This DOCX could not be opened. Try saving it again as a standard .docx file.");
   }
 }
+function readingPDFPageText(items) {
+  let text = "", previous = null;
+  for (const item of items) {
+    if (typeof item.str !== "string") continue;
+    if (item.str) {
+      const sameLine = previous && Math.abs(item.transform[5] - previous.transform[5]) < 2;
+      const gap = previous ? item.transform[4] - previous.transform[4] - previous.width : 0;
+      if (text && !/\s$/.test(text) && !/^\s/.test(item.str) && (!sameLine || gap > 1)) text += sameLine ? " " : "\n";
+      text += item.str;
+      previous = item;
+    }
+    if (item.hasEOL) { text += "\n"; previous = null; }
+  }
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+async function openReadingPDF(file) {
+  saveReadingSetupFields();
+  readingSetup.importError = "";
+  if (file.size > 20 * 1024 * 1024) {
+    readingSetup.importError = "Choose a PDF smaller than 20 MB.";
+    return readingLabHub("article");
+  }
+  const loading = { kind: "pdf-loading" };
+  readingFlow = loading;
+  readingDocumentLoadingView(file.name);
+  const status = root.querySelector(".reading-document-loading > p:last-child");
+  status.textContent = "Opening PDF text…";
+  const cancel = document.createElement("button");
+  cancel.className = "secondary-action"; cancel.dataset.action = "reading-cancel-import"; cancel.textContent = "Cancel";
+  status.after(cancel);
+  let task, timer, timedOut = false;
+  try {
+    const pdfjs = await import("./vendor/pdfjs/pdf.min.mjs");
+    if (readingFlow !== loading) return;
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", window.location.href).href;
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (readingFlow !== loading) return;
+    task = pdfjs.getDocument({ data, cMapUrl: new URL("./vendor/pdfjs/cmaps/", window.location.href).href, cMapPacked: true, isEvalSupported: false, useWasm: false });
+    timer = window.setTimeout(() => { timedOut = true; task.destroy().catch(() => {}); }, 45_000);
+    const pdf = await task.promise;
+    if (pdf.numPages > 100) throw new Error("Choose a PDF with up to 100 pages, or split this file into smaller parts.");
+    const pages = []; let length = 0, emptyPages = 0;
+    for (let number = 1; number <= pdf.numPages; number += 1) {
+      if (readingFlow !== loading) return;
+      status.textContent = `Reading page ${number} of ${pdf.numPages}…`;
+      const page = await pdf.getPage(number);
+      const content = await page.getTextContent();
+      const text = readingPDFPageText(content.items);
+      pages.push(text); length += text.length; if (!text) emptyPages += 1;
+      page.cleanup();
+      if (length > 500_000) throw new Error("This PDF contains too much text. Split it into smaller parts (up to 500,000 characters).");
+    }
+    if (readingFlow !== loading) return;
+    if (!length) throw new Error("This PDF has no selectable text. It may be a scan. Run text recognition (OCR) on it, then upload it again.");
+    readingDocument = null;
+    app.readingLab = { id: makeReadingId("pdf"), source: "article", format: "pdf", title: readingSetup.title.trim() || readingDocumentTitle(file), article: pages.join("\n\n"), pdfPages: pages, wordIds: [], marks: [], reviewedMarkIds: [] };
+    save(); readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView();
+    if (emptyPages) notice(`${emptyPages} page(s) have no selectable text. Images are not included in PDF text mode.`);
+  } catch (error) {
+    if (readingFlow !== loading) return;
+    readingFlow = null;
+    readingSetup.importError = timedOut ? "This PDF took too long to read. Try a smaller file." : error?.name === "PasswordException" ? "This PDF is password-protected. Upload an unlocked copy." : error?.name === "InvalidPDFException" ? "This PDF is damaged or invalid. Try exporting it again." : error instanceof TypeError ? "The PDF reader could not load. Check your connection and try again." : String(error?.message || "This PDF could not be opened.");
+    readingLabHub("article");
+  } finally {
+    window.clearTimeout(timer);
+    await task?.destroy().catch(() => {});
+  }
+}
 function readingLabHub(mode = readingSetup.source) {
   readingSetup.source = mode;
   const current = readingCurrentCollection();
@@ -104,13 +172,14 @@ function readingVocabularySetup(current) {
   return `<div class="reading-setup-body"><div class="reading-setup-field"><label class="field-label" for="reading-collection">VOCABULARY COLLECTION</label><select id="reading-collection">${app.collections.map((collection) => `<option value="${collection.id}" ${collection.id === current?.id ? "selected" : ""}>${esc(collection.name)} · ${collectionWords(collection.id).length} words</option>`).join("")}</select><p>${practice.length ? `${practice.length} words currently need practice. The passage can use those first.` : "All words in this collection are available for the reading passage."}</p></div><div class="reading-setup-field"><label class="field-label" for="reading-count">PASSAGE LENGTH</label><select id="reading-count"><option value="5" ${readingSetup.count === "5" ? "selected" : ""}>5 target words · quick reading</option><option value="8" ${readingSetup.count === "8" ? "selected" : ""}>8 target words · standard</option><option value="12" ${readingSetup.count === "12" ? "selected" : ""}>12 target words · extended</option><option value="all" ${readingSetup.count === "all" ? "selected" : ""}>All available words</option></select><p>Each target word appears in context and can be highlighted directly in the passage.</p></div><div class="reading-setup-footer"><span class="subtle-note">The passage is composed locally from your saved examples. No AI service or extra key is needed.</span><button class="modal-cta teal" data-action="reading-start-vocabulary" ${allWords.length ? "" : "disabled"}>Preview vocabulary →</button></div></div>`;
 }
 function readingArticleSetup() {
-  return `<div class="reading-setup-body reading-article-setup"><label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a document / plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .docx, .txt or .md</label><input id="reading-article-file" type="file" accept=".docx,.txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">DOCX opens as a black-on-white reading sheet and keeps headings, pictures, and supported equations. Select a word, phrase, or sentence to add it to review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Pasted text is saved privately. A DOCX stays only in this browser tab, while your marked cards are saved.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
+  return `<div class="reading-setup-body reading-article-setup">${readingSetup.importError ? `<p class="reading-lookup-error" role="alert">${esc(readingSetup.importError)}</p>` : ""}<label class="field-label" for="reading-article-title">ARTICLE TITLE</label><input id="reading-article-title" maxlength="90" value="${esc(readingSetup.title)}" placeholder="e.g. The future of city transport"><label class="field-label" for="reading-article-input">PASTE YOUR TEXT</label><textarea id="reading-article-input" class="reading-article-input" maxlength="50000" placeholder="Paste an article, reading passage, notes, or any other text here…">${esc(readingSetup.article)}</textarea><div class="reading-upload-row"><span>or upload a document / plain-text file</span><label class="secondary-action" for="reading-article-file">⇧ Upload .pdf, .docx, .txt or .md</label><input id="reading-article-file" type="file" accept=".pdf,application/pdf,.docx,.txt,.md,.csv,.tsv" hidden></div><p class="reading-article-note">PDF opens as selectable text, page by page (up to 20 MB / 100 pages). Scanned PDFs need a text layer. DOCX opens as a black-on-white reading sheet and keeps headings, pictures, and supported equations. Select a word, phrase, or sentence to add it to review cards.</p><div class="reading-setup-footer"><span class="subtle-note">Pasted text and text extracted from PDF are saved privately. A DOCX stays only in this browser tab, while your marked cards are saved.</span><button class="modal-cta teal" data-action="reading-start-article">Open article →</button></div></div>`;
 }
 function attachReadingArticleUploader() {
   const picker = document.querySelector("#reading-article-file");
   picker?.addEventListener("change", () => {
     const file = picker.files?.[0]; if (!file) return;
     saveReadingSetupFields();
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") { openReadingPDF(file); return; }
     if (/\.docx$/i.test(file.name)) { openReadingDocument(file); return; }
     if (file.size > 300000) return notice("Choose a text file under 300 KB.");
     const reader = new FileReader();
@@ -177,6 +246,7 @@ function decorateCustomParagraph(paragraph, marks) {
 }
 function readingPassageMarkup(draft) {
   if (draft.source === "document") return readingDocumentIsOpen() ? readingDocument.html : `<div class="document-reupload"><h3>Re-upload this document to continue.</h3><p>Document files stay in this browser tab, so their pictures and formatting are never uploaded to your workspace.</p></div>`;
+  if (draft.source === "article" && Array.isArray(draft.pdfPages)) return draft.pdfPages.map((text, index) => `<section class="reading-pdf-page"><h3 class="reading-pdf-page-label">Page ${index + 1}</h3><p class="reading-paragraph reading-pdf-text">${text ? decorateCustomParagraph(text, readingMarks(draft)) : "No selectable text on this page."}</p></section>`).join("");
   if (draft.source === "article") return String(draft.article || "").split(/\n\s*\n/).filter(Boolean).map((paragraph) => `<p class="reading-paragraph">${decorateCustomParagraph(paragraph, readingMarks(draft))}</p>`).join("");
   const words = readingWords(draft), groups = [];
   for (let index = 0; index < words.length; index += 3) groups.push(words.slice(index, index + 3));
@@ -429,6 +499,7 @@ document.addEventListener("click", (event) => {
   }
   if (action === "reading-source") { saveReadingSetupFields(); readingLabHub(id); }
   if (action === "reading-start-vocabulary") createReadingDraft("vocabulary");
+  if (action === "reading-cancel-import") { readingFlow = null; readingLabHub("article"); }
   if (action === "reading-start-article") createReadingDraft("article");
   if (action === "reading-preview-next") { readingFlow.index += 1; readingPreviewView(); }
   if (action === "reading-open-passage" || action === "reading-return-passage") { cancelReadingLookup(); readingFlow = { kind: "passage", markerOn: true, selection: null }; readingPassageView(); }

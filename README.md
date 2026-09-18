@@ -18,6 +18,12 @@ Open [http://localhost:4173](http://localhost:4173).
 
 On macOS, you can instead double-click `Запустить Lexora.command` in Finder.
 
+### Read PDF files
+
+Open **Reading lab → My article → Upload .pdf, .docx, .txt or .md** and choose a PDF. Text is extracted in your browser into selectable pages. Highlight words to get easy English explanations and save review cards. Extracted text, page divisions, and marks survive a reload in the saved workspace; the original PDF is not uploaded.
+
+PDF text mode does not reproduce images or complex page layouts. Image-only scans require OCR first; password-protected files must be unlocked before upload. Limits: 20 MB, 100 pages, and 500,000 extracted characters. A failed import keeps your previous reading and cards.
+
 ### Reading Lab explanations (Groq)
 
 Selecting a word or phrase and choosing **Learn more** shows its meaning in easy English (A2–B1) and a short example. Review cards and the mini quiz use that explanation instead of a Russian translation. Existing saved English definitions and personal notes remain usable. The API uses Groq’s `openai/gpt-oss-20b` model with low reasoning effort.

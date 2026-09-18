@@ -36,3 +36,14 @@ test("reopening a saved English-only explanation does not call the API", async (
   await vm.runInContext('lookUpReadingMark("mark")', context);
   assert.match(context.root.innerHTML, /The land next to a river/);
 });
+
+test("PDF text joins adjacent glyphs, separates words, and preserves line endings", () => {
+  const context = reader({});
+  context.items = [
+    { str: "riv", width: 12, transform: [1, 0, 0, 1, 0, 100] },
+    { str: "er", width: 8, transform: [1, 0, 0, 1, 12, 100] },
+    { str: "bank", width: 20, transform: [1, 0, 0, 1, 25, 100], hasEOL: true },
+    { str: "Next page", width: 40, transform: [1, 0, 0, 1, 0, 80] },
+  ];
+  assert.equal(vm.runInContext("readingPDFPageText(items)", context), "river bank\nNext page");
+});
