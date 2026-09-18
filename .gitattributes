@@ -1,0 +1,3 @@
+
+# PDF.js packed character maps are binary assets.
+*.bcmap binary
