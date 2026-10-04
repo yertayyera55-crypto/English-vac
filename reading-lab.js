@@ -105,6 +105,23 @@ function readingPDFPageText(items) {
   }
   return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
+async function readingPDFPageItems(page) {
+  // PDF.js getTextContent() uses async iteration over ReadableStream. Some
+  // Safari versions support getReader() but not that iteration interface.
+  const reader = page.streamTextContent().getReader();
+  const items = [];
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return items;
+      if (Array.isArray(value?.items)) {
+        for (const item of value.items) items.push(item);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 async function openReadingPDF(file) {
   saveReadingSetupFields();
   readingSetup.importError = "";
@@ -120,10 +137,11 @@ async function openReadingPDF(file) {
   const cancel = document.createElement("button");
   cancel.className = "secondary-action"; cancel.dataset.action = "reading-cancel-import"; cancel.textContent = "Cancel";
   status.after(cancel);
-  let task, timer, timedOut = false;
+  let task, timer, timedOut = false, stage = "module";
   try {
     const pdfjs = await import("./vendor/pdfjs/pdf.min.mjs");
     if (readingFlow !== loading) return;
+    stage = "document";
     pdfjs.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", window.location.href).href;
     const data = new Uint8Array(await file.arrayBuffer());
     if (readingFlow !== loading) return;
@@ -132,12 +150,12 @@ async function openReadingPDF(file) {
     const pdf = await task.promise;
     if (pdf.numPages > 100) throw new Error("Choose a PDF with up to 100 pages, or split this file into smaller parts.");
     const pages = []; let length = 0, emptyPages = 0;
+    stage = "text";
     for (let number = 1; number <= pdf.numPages; number += 1) {
       if (readingFlow !== loading) return;
       status.textContent = `Reading page ${number} of ${pdf.numPages}…`;
       const page = await pdf.getPage(number);
-      const content = await page.getTextContent();
-      const text = readingPDFPageText(content.items);
+      const text = readingPDFPageText(await readingPDFPageItems(page));
       pages.push(text); length += text.length; if (!text) emptyPages += 1;
       page.cleanup();
       if (length > 500_000) throw new Error("This PDF contains too much text. Split it into smaller parts (up to 500,000 characters).");
@@ -150,8 +168,9 @@ async function openReadingPDF(file) {
     if (emptyPages) notice(`${emptyPages} page(s) have no selectable text. Images are not included in PDF text mode.`);
   } catch (error) {
     if (readingFlow !== loading) return;
+    console.error(`[reading-pdf] ${stage} failed`, error);
     readingFlow = null;
-    readingSetup.importError = timedOut ? "This PDF took too long to read. Try a smaller file." : error?.name === "PasswordException" ? "This PDF is password-protected. Upload an unlocked copy." : error?.name === "InvalidPDFException" ? "This PDF is damaged or invalid. Try exporting it again." : error instanceof TypeError ? "The PDF reader could not load. Check your connection and try again." : String(error?.message || "This PDF could not be opened.");
+    readingSetup.importError = timedOut ? "This PDF took too long to read. Try a smaller file." : error?.name === "PasswordException" ? "This PDF is password-protected. Upload an unlocked copy." : error?.name === "InvalidPDFException" ? "This PDF is damaged or invalid. Try exporting it again." : stage === "module" ? "The PDF reader could not load. Check your connection and try again." : error instanceof TypeError ? "This browser could not read the PDF text. Try updating your browser." : String(error?.message || "This PDF could not be opened.");
     readingLabHub("article");
   } finally {
     window.clearTimeout(timer);

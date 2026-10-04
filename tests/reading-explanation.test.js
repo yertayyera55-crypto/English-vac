@@ -47,3 +47,30 @@ test("PDF text joins adjacent glyphs, separates words, and preserves line ending
   ];
   assert.equal(vm.runInContext("readingPDFPageText(items)", context), "river bank\nNext page");
 });
+
+test("PDF text reads stream chunks without Safari's missing async iterator", async () => {
+  const context = reader({});
+  let reads = 0;
+  let released = false;
+  context.page = {
+    getTextContent() { assert.fail("getTextContent requires ReadableStream async iteration in Safari"); },
+    streamTextContent() {
+      return {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              if (reads === 1) return { value: { items: [{ str: "river", width: 24, transform: [1, 0, 0, 1, 0, 100] }] }, done: false };
+              if (reads === 2) return { value: { items: [{ str: "bank", width: 20, transform: [1, 0, 0, 1, 30, 100] }] }, done: false };
+              return { done: true };
+            },
+            releaseLock() { released = true; },
+          };
+        },
+      };
+    },
+  };
+  assert.equal(await vm.runInContext("readingPDFPageItems(page).then(readingPDFPageText)", context), "river bank");
+  assert.equal(reads, 3);
+  assert.equal(released, true);
+});
