@@ -1,5 +1,6 @@
 const flashcardImportState = { file: null, rows: [], summary: null };
 let flashSession = null;
+let flashcardAdvanceTimer = null;
 
 function ensureFlashcardSets() {
   if (!Array.isArray(app.flashcardSets)) app.flashcardSets = [];
@@ -7,6 +8,18 @@ function ensureFlashcardSets() {
 }
 function flashcardSet(id) { return ensureFlashcardSets().find((set) => set.id === id); }
 function flashcardCards(set) { return Array.isArray(set?.cards) ? set.cards : []; }
+const flashcardAlphabet = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+function flashcardSortOrder(set) { return ["az", "za", "random"].includes(set?.sortOrder) ? set.sortOrder : "az"; }
+function orderedFlashcards(set, cards = flashcardCards(set)) {
+  const order = flashcardSortOrder(set);
+  if (order === "random") return [...cards];
+  const direction = order === "az" ? 1 : -1;
+  return [...cards].sort((left, right) => direction * flashcardAlphabet.compare(String(left.front || ""), String(right.front || "")) || String(left.id).localeCompare(String(right.id)));
+}
+function clearFlashcardAdvance() { window.clearTimeout(flashcardAdvanceTimer); flashcardAdvanceTimer = null; }
+function flashcardWord(card) { return app.words.find((word) => String(word.w || "").toLocaleLowerCase() === String(card?.front || "").trim().toLocaleLowerCase()); }
+function flashcardExample(card) { return String(card?.example || flashcardWord(card)?.e || "").trim(); }
+function flashcardTranslation(card) { return String(card?.translation || flashcardWord(card)?.tr || "").trim(); }
 function flashcardStats(set) {
   const cards = flashcardCards(set), learned = cards.filter((card) => card.known).length;
   return { total: cards.length, learned, learning: cards.length - learned, percent: cards.length ? Math.round(learned / cards.length * 100) : 0 };
@@ -22,6 +35,7 @@ function findOrCreateFlashcardSet(name) {
   return set;
 }
 function flashcardHub() {
+  clearFlashcardAdvance();
   flashSession = null;
   const sets = ensureFlashcardSets();
   const totalCards = sets.reduce((count, set) => count + flashcardStats(set).total, 0);
@@ -30,8 +44,8 @@ function flashcardHub() {
 }
 function flashcardSetView(id) {
   const set = flashcardSet(id); if (!set) return flashcardHub();
-  const cards = flashcardCards(set), stats = flashcardStats(set);
-  root.innerHTML = `<div class="overlay flashcard-overlay" role="dialog" aria-modal="true" aria-label="${esc(set.name)} flashcards"><section class="modal flashcard-hub flashcard-set-view"><button class="icon-button modal-close" data-action="close" aria-label="Close">×</button><div class="modal-intro"><button class="flashcard-back-link" data-action="flashcards">← All flashcard sets</button><div class="flashcard-set-heading"><div><p class="eyebrow">FLASHCARD SET</p><h2>${esc(set.name)}</h2><p>${stats.total ? `${stats.learned} of ${stats.total} cards are clearly learned. Cards marked “still learning” repeat in the intensive loop.` : "Add your first front-and-back card, or import a file using the template."}</p></div><div class="flashcard-total"><strong>${stats.percent}%</strong><span>learned</span></div></div><div class="flashcard-hub-actions"><button class="secondary-action" data-action="flashcard-import">⇧ Import cards</button><button class="secondary-action" data-action="flashcard-reset" data-id="${set.id}" ${stats.total ? "" : "disabled"}>Reset learned</button><button class="modal-cta" data-action="flashcard-add-card" data-id="${set.id}">+ Add card</button><button class="flashcard-start-button" data-action="flashcard-start" data-id="${set.id}" ${stats.total ? "" : "disabled"}>Start intensive →</button></div><div class="flashcard-card-list">${cards.length ? cards.map((card) => `<article class="flashcard-card-row"><span class="flashcard-card-state ${card.known ? "learned" : "learning"}">${card.known ? "✓ Learned" : "↻ Learning"}</span><div><strong>${esc(card.front)}</strong><p>${esc(card.back)}</p>${card.example ? `<small>${esc(card.example)}</small>` : ""}</div><button class="icon-button flashcard-delete-card" data-action="flashcard-delete-card" data-id="${card.id}" data-set="${set.id}" aria-label="Delete ${esc(card.front)}">×</button></article>`).join("") : `<div class="flashcard-empty compact"><span>+</span><h3>No cards in this set yet.</h3><p>Add a card manually or import a CSV / Excel file with the template.</p></div>`}</div><div class="flashcard-set-footer"><button class="danger-button" data-action="flashcard-delete-set" data-id="${set.id}">Delete this set</button><span>${stats.total} ${stats.total === 1 ? "card" : "cards"} saved privately in your workspace</span></div></div></section></div>`;
+  const cards = orderedFlashcards(set), stats = flashcardStats(set);
+  root.innerHTML = `<div class="overlay flashcard-overlay" role="dialog" aria-modal="true" aria-label="${esc(set.name)} flashcards"><section class="modal flashcard-hub flashcard-set-view"><button class="icon-button modal-close" data-action="close" aria-label="Close">×</button><div class="modal-intro"><button class="flashcard-back-link" data-action="flashcards">← All flashcard sets</button><div class="flashcard-set-heading"><div><p class="eyebrow">FLASHCARD SET</p><h2>${esc(set.name)}</h2><p>${stats.total ? `${stats.learned} of ${stats.total} cards are clearly learned. Cards marked “still learning” repeat in the intensive loop.` : "Add your first front-and-back card, or import a file using the template."}</p></div><div class="flashcard-total"><strong>${stats.percent}%</strong><span>learned</span></div></div><div class="flashcard-hub-actions"><button class="secondary-action" data-action="flashcard-import">⇧ Import cards</button><button class="secondary-action" data-action="flashcard-reset" data-id="${set.id}" ${stats.total ? "" : "disabled"}>Reset learned</button><button class="modal-cta" data-action="flashcard-add-card" data-id="${set.id}">+ Add card</button><button class="flashcard-start-button" data-action="flashcard-start" data-id="${set.id}" ${stats.total ? "" : "disabled"}>Start intensive →</button></div><div class="flashcard-sort-row"><label for="flashcard-sort-order">CARD ORDER</label><select id="flashcard-sort-order" data-set="${set.id}" aria-label="Card order"><option value="az" ${flashcardSortOrder(set) === "az" ? "selected" : ""}>A–Z</option><option value="za" ${flashcardSortOrder(set) === "za" ? "selected" : ""}>Z–A</option><option value="random" ${flashcardSortOrder(set) === "random" ? "selected" : ""}>Random</option></select></div><div class="flashcard-card-list">${cards.length ? cards.map((card) => `<article class="flashcard-card-row"><span class="flashcard-card-state ${card.known ? "learned" : "learning"}">${card.known ? "✓ Learned" : "↻ Learning"}</span><div><strong>${esc(card.front)}</strong><p>${esc(card.back)}</p>${flashcardExample(card) ? `<small>${esc(flashcardExample(card))}</small>` : ""}${flashcardTranslation(card) ? `<small>RU · ${esc(flashcardTranslation(card))}</small>` : ""}</div><button class="icon-button flashcard-delete-card" data-action="flashcard-delete-card" data-id="${card.id}" data-set="${set.id}" aria-label="Delete ${esc(card.front)}">×</button></article>`).join("") : `<div class="flashcard-empty compact"><span>+</span><h3>No cards in this set yet.</h3><p>Add a card manually or import a CSV / Excel file with the template.</p></div>`}</div><div class="flashcard-set-footer"><button class="danger-button" data-action="flashcard-delete-set" data-id="${set.id}">Delete this set</button><span>${stats.total} ${stats.total === 1 ? "card" : "cards"} saved privately in your workspace</span></div></div></section></div>`;
 }
 function flashcardSetModal() {
   root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-form-modal"><button class="icon-button modal-close" data-action="close" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">NEW FLASHCARD SET</p><h2>Give quick recall a home.</h2><p>Keep this separate from your SAT and IELTS collections. A set can be as focused as “Linking words” or “Economics terms”.</p><label class="field-label" for="flashcard-set-name">SET NAME</label><input id="flashcard-set-name" maxlength="50" placeholder="e.g. Linking words" autofocus><div class="modal-footer"><span class="subtle-note">You can add cards or import them next.</span><button class="modal-cta purple" data-action="flashcard-save-set">Create set</button></div></div></section></div>`;
@@ -43,13 +57,18 @@ function saveFlashcardSet() {
 }
 function flashcardCardModal(setId) {
   const set = flashcardSet(setId); if (!set) return flashcardHub();
-  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-form-modal"><button class="icon-button modal-close" data-action="flashcard-open-set" data-id="${set.id}" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">ADD FLASHCARD · ${esc(set.name)}</p><h2>One clear idea per card.</h2><p>The front is what you want to recall. The back is the meaning, use, translation, or explanation.</p><label class="field-label" for="flashcard-card-front">FRONT</label><input id="flashcard-card-front" maxlength="120" placeholder="e.g. However" autofocus><label class="field-label" for="flashcard-card-back">BACK</label><textarea id="flashcard-card-back" class="flashcard-textarea" maxlength="400" placeholder="Use to introduce a contrast."></textarea><label class="field-label" for="flashcard-card-example">OPTIONAL EXAMPLE</label><input id="flashcard-card-example" maxlength="300" placeholder="However, the data tell a different story."><div class="modal-footer"><button class="secondary-action" data-action="flashcard-open-set" data-id="${set.id}">Cancel</button><button class="modal-cta purple" data-action="flashcard-save-card" data-id="${set.id}">Add card</button></div></div></section></div>`;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-form-modal"><button class="icon-button modal-close" data-action="flashcard-open-set" data-id="${set.id}" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">ADD FLASHCARD · ${esc(set.name)}</p><h2>One clear idea per card.</h2><p>The front is what you want to recall. The back is the meaning, use, translation, or explanation.</p><label class="field-label" for="flashcard-card-front">FRONT</label><input id="flashcard-card-front" maxlength="120" placeholder="e.g. However" autofocus><label class="field-label" for="flashcard-card-back">BACK</label><textarea id="flashcard-card-back" class="flashcard-textarea" maxlength="400" placeholder="Use to introduce a contrast."></textarea><label class="field-label" for="flashcard-card-example">OPTIONAL EXAMPLE</label><input id="flashcard-card-example" maxlength="300" placeholder="However, the data tell a different story."><label class="field-label" for="flashcard-card-translation">RUSSIAN TRANSLATION · OPTIONAL</label><input id="flashcard-card-translation" maxlength="200" placeholder="e.g. однако"><div class="modal-footer"><button class="secondary-action" data-action="flashcard-open-set" data-id="${set.id}">Cancel</button><button class="modal-cta purple" data-action="flashcard-save-card" data-id="${set.id}">Add card</button></div></div></section></div>`;
 }
 function saveFlashcardCard(setId) {
   const set = flashcardSet(setId); if (!set) return flashcardHub();
-  const front = document.querySelector("#flashcard-card-front")?.value.trim(), back = document.querySelector("#flashcard-card-back")?.value.trim(), example = document.querySelector("#flashcard-card-example")?.value.trim();
+  const front = document.querySelector("#flashcard-card-front")?.value.trim(), back = document.querySelector("#flashcard-card-back")?.value.trim(), example = document.querySelector("#flashcard-card-example")?.value.trim(), translation = document.querySelector("#flashcard-card-translation")?.value.trim();
   if (!front || !back) return notice("Add both the front and back of the card.");
-  flashcardCards(set).unshift({ id: makeFlashcardId(), front, back, example, known: false, reviews: 0 }); save(); flashcardSetView(set.id);
+  flashcardCards(set).unshift({ id: makeFlashcardId(), front, back, example, translation, known: false, reviews: 0 }); save(); flashcardSetView(set.id);
+}
+function setFlashcardOrder(setId, order) {
+  const set = flashcardSet(setId);
+  if (!set || !["az", "za", "random"].includes(order)) return;
+  set.sortOrder = order; save(); flashcardSetView(setId);
 }
 function deleteFlashcardCard(setId, cardId) {
   const set = flashcardSet(setId); if (!set) return flashcardHub();
@@ -65,22 +84,50 @@ function deleteFlashcardSet(setId) {
   app.flashcardSets = ensureFlashcardSets().filter((item) => item.id !== setId); save(); flashcardHub(); notice("Flashcard set deleted.");
 }
 function startFlashcardSession(setId) {
+  clearFlashcardAdvance();
   const set = flashcardSet(setId), cards = flashcardCards(set); if (!set || !cards.length) return notice("Add at least one flashcard before starting.");
   const learning = cards.filter((card) => !card.known), startCards = learning.length ? learning : cards;
-  flashSession = { setId, queue: shuffled(startCards.map((card) => card.id)), index: 0, revealed: false, again: 0, learnedThisSession: 0 };
+  const ordered = orderedFlashcards(set, startCards).map((card) => card.id);
+  flashSession = { setId, queue: flashcardSortOrder(set) === "random" ? shuffled(ordered) : ordered, index: 0, revealed: false, again: 0, learnedThisSession: 0, transitioning: false };
   flashcardStudyView();
 }
 function activeFlashcard() {
   const set = flashcardSet(flashSession?.setId); return { set, card: flashcardCards(set).find((card) => card.id === flashSession?.queue[flashSession.index]) };
 }
+function flashcardOrderLabel(set) { return { az: "A–Z", za: "Z–A", random: "Random" }[flashcardSortOrder(set)]; }
 function flashcardStudyView() {
   const { set, card } = activeFlashcard(); if (!set || !card) return flashcardHub();
   const stats = flashcardStats(set), inLoop = flashSession.queue.length, progress = stats.total ? Math.round(stats.learned / stats.total * 100) : 0;
-  root.innerHTML = `<div class="overlay flashcard-overlay" role="dialog" aria-modal="true" aria-label="Intensive flashcard session"><section class="modal flashcard-study-modal"><div class="session-top"><span class="session-label">INTENSIVE FLASHCARDS · ${stats.learned} OF ${stats.total} LEARNED</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress flashcard-session-progress"><i style="width:${progress}%"></i></div><div class="flashcard-study-body"><div class="flashcard-study-meta"><span>${esc(set.name)}</span><b>${inLoop} ${inLoop === 1 ? "card" : "cards"} in the loop</b></div><button class="intensive-card ${flashSession.revealed ? "revealed" : ""}" data-action="flashcard-flip" aria-label="${flashSession.revealed ? "Hide answer" : "Reveal answer"}"><span class="intensive-card-face intensive-card-front"><small>FRONT</small><strong>${esc(card.front)}</strong><b>${flashSession.revealed ? "Tap to hide answer" : "Tap or press Space to reveal"}</b></span><span class="intensive-card-face intensive-card-back"><small>BACK</small><strong>${esc(card.back)}</strong>${card.example ? `<em>${esc(card.example)}</em>` : ""}<b>Now decide: know it or repeat it.</b></span></button><div class="flashcard-study-actions"><button class="flashcard-again" data-action="flashcard-rate" data-id="again" ${flashSession.revealed ? "" : "disabled"}><span>1</span><b>Still learning</b><small>Repeat after two cards</small></button><button class="flashcard-known" data-action="flashcard-rate" data-id="known" ${flashSession.revealed ? "" : "disabled"}><span>2</span><b>I know it</b><small>Mark as learned</small></button></div><p class="flashcard-shortcuts">Space — reveal · 1 — still learning · 2 — I know it</p></div></section></div>`;
+  const example = flashcardExample(card), translation = flashcardTranslation(card);
+  root.innerHTML = `<div class="overlay flashcard-overlay" role="dialog" aria-modal="true" aria-label="Intensive flashcard session"><section class="modal flashcard-study-modal"><div class="session-top"><span class="session-label">INTENSIVE FLASHCARDS · ${stats.learned} OF ${stats.total} LEARNED</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress flashcard-session-progress"><i style="width:${progress}%"></i></div><div class="flashcard-study-body"><div class="flashcard-study-meta"><span>${esc(set.name)}</span><b>${flashcardOrderLabel(set)} · ${inLoop} ${inLoop === 1 ? "card" : "cards"} in the loop</b></div><button class="intensive-card" data-action="flashcard-flip" aria-label="Reveal answer"><span class="intensive-card-face intensive-card-front"><small>FRONT</small><strong>${esc(card.front)}</strong><b>Tap or press Space to reveal</b></span><span class="intensive-card-face intensive-card-back"><small>MEANING</small><strong>${esc(card.back)}</strong><em class="flashcard-study-example" ${example ? "" : "hidden"}>${esc(example)}</em><span class="intensive-card-translation" ${translation ? "" : "hidden"}><small>RU</small><span>${esc(translation)}</span></span><b>Now decide: know it or repeat it.</b></span></button><div class="flashcard-study-actions"><button class="flashcard-again" data-action="flashcard-rate" data-id="again" disabled><span>1</span><b>Still learning</b><small>Repeat after two cards</small></button><button class="flashcard-known" data-action="flashcard-rate" data-id="known" disabled><span>2</span><b>I know it</b><small>Mark as learned</small></button></div><p class="flashcard-shortcuts">Space — reveal · 1 — still learning · 2 — I know it</p></div></section></div>`;
 }
-function flipFlashcard() { if (!flashSession) return; flashSession.revealed = !flashSession.revealed; flashcardStudyView(); }
+function updateFlashcardStudyView() {
+  const { set, card } = activeFlashcard();
+  const modal = root.querySelector(".flashcard-study-modal");
+  if (!set || !card || !modal) return flashcardStudyView();
+  const stats = flashcardStats(set), inLoop = flashSession.queue.length;
+  const button = modal.querySelector(".intensive-card");
+  modal.querySelector(".session-label").textContent = `INTENSIVE FLASHCARDS · ${stats.learned} OF ${stats.total} LEARNED`;
+  modal.querySelector(".flashcard-session-progress i").style.width = `${stats.percent}%`;
+  modal.querySelector(".flashcard-study-meta b").textContent = `${flashcardOrderLabel(set)} · ${inLoop} ${inLoop === 1 ? "card" : "cards"} in the loop`;
+  button.querySelector(".intensive-card-front strong").textContent = card.front;
+  button.querySelector(".intensive-card-back strong").textContent = card.back;
+  const example = modal.querySelector(".flashcard-study-example");
+  example.textContent = flashcardExample(card); example.hidden = !example.textContent;
+  const translation = modal.querySelector(".intensive-card-translation");
+  translation.querySelector("span").textContent = flashcardTranslation(card); translation.hidden = !translation.querySelector("span").textContent;
+  button.classList.toggle("revealed", flashSession.revealed);
+  button.setAttribute("aria-label", flashSession.revealed ? "Hide answer" : "Reveal answer");
+  button.querySelector(".intensive-card-front b").textContent = flashSession.revealed ? "Tap to hide answer" : "Tap or press Space to reveal";
+  modal.querySelectorAll(".flashcard-study-actions button").forEach((action) => { action.disabled = !flashSession.revealed; });
+}
+function flipFlashcard() {
+  if (!flashSession || flashSession.transitioning) return;
+  flashSession.revealed = !flashSession.revealed;
+  updateFlashcardStudyView();
+}
 function rateFlashcard(result) {
-  const { set, card } = activeFlashcard(); if (!set || !card || !flashSession.revealed) return;
+  const { set, card } = activeFlashcard(); if (!set || !card || !flashSession.revealed || flashSession.transitioning || !["known", "again"].includes(result)) return;
   const wasKnown = Boolean(card.known); card.reviews = Number(card.reviews || 0) + 1;
   flashSession.queue.splice(flashSession.index, 1);
   if (result === "known") { card.known = true; if (!wasKnown) flashSession.learnedThisSession += 1; }
@@ -92,10 +139,21 @@ function rateFlashcard(result) {
   save(); flashSession.revealed = false;
   if (!flashSession.queue.length) return flashcardStudyResult(set);
   if (flashSession.index >= flashSession.queue.length) flashSession.index = 0;
-  flashcardStudyView();
+  const session = flashSession, button = root.querySelector(".intensive-card");
+  if (!button) return flashcardStudyView();
+  session.transitioning = true;
+  button.classList.add("changing");
+  flashcardAdvanceTimer = window.setTimeout(() => {
+    flashcardAdvanceTimer = null;
+    if (flashSession !== session) return;
+    session.transitioning = false;
+    updateFlashcardStudyView();
+    window.requestAnimationFrame(() => button.classList.remove("changing"));
+  }, 160);
 }
 function flashcardStudyResult(set) {
   const stats = flashcardStats(set), summary = { learned: flashSession?.learnedThisSession || 0, again: flashSession?.again || 0 };
+  clearFlashcardAdvance();
   flashSession = null;
   root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-result-modal"><div class="result"><div class="result-mark">✓</div><p class="eyebrow">INTENSIVE SESSION COMPLETE</p><h2>That set is clear now.</h2><p>${summary.learned} ${summary.learned === 1 ? "card was" : "cards were"} marked learned${summary.again ? ` after ${summary.again} extra ${summary.again === 1 ? "repeat" : "repeats"}` : ""}.</p><div class="result-grid"><div><strong>${stats.learned} / ${stats.total}</strong><span>learned in set</span></div><div><strong>${summary.learned}</strong><span>learned now</span></div><div><strong>${stats.percent}%</strong><span>set progress</span></div></div><div class="modal-footer"><button class="secondary-action" data-action="flashcard-open-set" data-id="${set.id}">View set</button><button class="modal-cta purple" data-action="flashcards">All flashcard sets</button></div></div></section></div>`;
 }
@@ -122,7 +180,7 @@ function inspectFlashcardRows(rows) {
 }
 function flashcardImportModal() {
   flashcardImportState.file = null; flashcardImportState.rows = []; flashcardImportState.summary = null;
-  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-form-modal"><button class="icon-button modal-close" data-action="flashcards" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">IMPORT FLASHCARDS</p><h2>Bring a fast-recall set.</h2><p>Upload Excel, CSV, or TSV. Use <code>front</code> and <code>back</code>; add <code>example</code> and <code>set</code> when useful.</p><div id="flashcard-dropzone" class="import-dropzone"><span class="import-file-icon">CARD</span><div><strong>Drop a file here</strong><p>Excel (.xlsx), CSV, or TSV · first sheet only</p></div><div class="file-picker"><input id="flashcard-import-file" type="file" accept=".xlsx,.csv,.tsv,.txt" /><label for="flashcard-import-file">Choose a file</label></div></div><label class="field-label" for="flashcard-import-set">SET FOR BLANK ROWS</label><input id="flashcard-import-set" maxlength="50" placeholder="e.g. Linking words"><div id="flashcard-import-preview"></div><div class="modal-footer"><button class="template-link" data-action="flashcard-template">Download template</button><button class="modal-cta purple" data-action="flashcard-process-import" disabled>Import cards</button></div></div></section></div>`;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal flashcard-form-modal"><button class="icon-button modal-close" data-action="flashcards" aria-label="Close">×</button><div class="modal-intro"><p class="eyebrow">IMPORT FLASHCARDS</p><h2>Bring a fast-recall set.</h2><p>Upload Excel, CSV, or TSV. Use <code>front</code> and <code>back</code>; add <code>example</code>, <code>translation</code>, and <code>set</code> when useful.</p><div id="flashcard-dropzone" class="import-dropzone"><span class="import-file-icon">CARD</span><div><strong>Drop a file here</strong><p>Excel (.xlsx), CSV, or TSV · first sheet only</p></div><div class="file-picker"><input id="flashcard-import-file" type="file" accept=".xlsx,.csv,.tsv,.txt" /><label for="flashcard-import-file">Choose a file</label></div></div><label class="field-label" for="flashcard-import-set">SET FOR BLANK ROWS</label><input id="flashcard-import-set" maxlength="50" placeholder="e.g. Linking words"><div id="flashcard-import-preview"></div><div class="modal-footer"><button class="template-link" data-action="flashcard-template">Download template</button><button class="modal-cta purple" data-action="flashcard-process-import" disabled>Import cards</button></div></div></section></div>`;
   const dropzone = document.querySelector("#flashcard-dropzone"), picker = document.querySelector("#flashcard-import-file");
   picker.addEventListener("change", () => readFlashcardFile(picker.files[0]));
   document.querySelector("#flashcard-import-set").addEventListener("input", renderFlashcardImportPreview);
@@ -165,13 +223,13 @@ function importFlashcards() {
   const fallbackSet = document.querySelector("#flashcard-import-set")?.value.trim() || "Imported flashcards";
   const setNames = new Set();
   valid.forEach((row) => {
-    const set = findOrCreateFlashcardSet(row.set || fallbackSet), example = row.example || row.context || "";
-    flashcardCards(set).unshift({ id: makeFlashcardId(), front: flashcardFront(row), back: flashcardBack(row), example, known: false, reviews: 0 }); setNames.add(set.id);
+    const set = findOrCreateFlashcardSet(row.set || fallbackSet), example = row.example || row.context || "", translation = row.translation || row.russian || row.ru || row.tr || "";
+    flashcardCards(set).unshift({ id: makeFlashcardId(), front: flashcardFront(row), back: flashcardBack(row), example, translation, known: false, reviews: 0 }); setNames.add(set.id);
   });
   save(); flashcardHub(); notice(`Imported ${valid.length} ${valid.length === 1 ? "flashcard" : "flashcards"} into ${setNames.size} ${setNames.size === 1 ? "set" : "sets"}.`);
 }
 function downloadFlashcardTemplate() {
-  const rows = ["front,back,example,set", "However,Use to introduce a contrast.,\"However, the results changed after the policy.\",Linking words", "In addition,Use to add a related idea.,\"In addition, the survey included interviews.\",Linking words"];
+  const rows = ["front,back,example,translation,set", "However,Use to introduce a contrast.,\"However, the results changed after the policy.\",однако,Linking words", "In addition,Use to add a related idea.,\"In addition, the survey included interviews.\",кроме того,Linking words"];
   const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([`\uFEFF${rows.join("\n")}\n`], { type: "text/csv;charset=utf-8" })); link.download = "lexora-flashcards-template.csv"; link.click(); URL.revokeObjectURL(link.href);
 }
 
@@ -194,10 +252,13 @@ document.addEventListener("click", (event) => {
   if (action === "flashcard-process-import") importFlashcards();
   if (action === "flashcard-template") downloadFlashcardTemplate();
 });
+document.addEventListener("change", (event) => {
+  if (event.target.id === "flashcard-sort-order") setFlashcardOrder(event.target.dataset.set, event.target.value);
+});
 document.addEventListener("keydown", (event) => {
-  if (!flashSession || event.target.matches("input, textarea, select")) return;
-  if (event.key === " " || event.key === "Enter") { event.preventDefault(); flipFlashcard(); }
+  if (!flashSession || event.repeat || event.target.closest("input, textarea, select, [contenteditable]")) return;
+  if ((event.key === " " || event.key === "Enter") && !event.target.closest("button")) { event.preventDefault(); flipFlashcard(); }
   if (event.key === "1") { event.preventDefault(); rateFlashcard("again"); }
   if (event.key === "2") { event.preventDefault(); rateFlashcard("known"); }
 });
-window.LexoraFlashcards = { clearSession: () => { flashSession = null; } };
+window.LexoraFlashcards = { clearSession: () => { clearFlashcardAdvance(); flashSession = null; } };

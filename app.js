@@ -16,12 +16,12 @@ const wordSeed = [
   { w: "nuance", p: "/ˈnjuːɑːns/", pos: "noun", d: "a subtle difference in meaning, expression, or tone", tr: "оттенок значения", e: "The translator captured the nuance of the speaker's hesitation.", r: ["subtlety", "shade", "distinction"], c: ["sat2", "reading"], s: "learning", m: 46, rec: ["The actor changed the nuance of the line by pausing before the final word.", "What does nuance most likely mean here?", ["A small shade of meaning", "The main plot", "A factual error", "A loud sound"]], ctx: ["Both proposals support public transport, but one focuses on fares and the other late-night service.", "What is the nuance between them?", ["They prioritize different benefits", "They have no goal in common", "One rejects transport", "They are identical"]], fill: ["Knowing the cultural _____ helped her avoid an unintended insult.", ["nuance", "scarcity", "convention", "resilience"]] },
 ];
 
-const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), flashcardSets: [], readingLab: null, streak: 7, accuracy: 82, theme: "dark" });
+const freshWorkspace = () => ({ collections: structuredClone(collectionSeed), words: structuredClone(wordSeed).map((x) => ({ ...x, id: x.w, due: x.s !== "mastered" })), flashcardSets: [], cardSortOrder: "az", readingLab: null, streak: 7, accuracy: 82, theme: "dark" });
 const app = { ...freshWorkspace(), activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false };
 const root = document.querySelector("#overlay-root"), toast = document.querySelector("#toast");
 const storageKey = "lexora-state";
 const cloud = { enabled: false, client: null, user: null, state: "local", syncTimer: null, isLoading: false, needsWorkspaceChoice: false };
-let session, test, cardDeck, toastTimer;
+let session, test, cardDeck, toastTimer, cardAdvanceTimer;
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[x]);
 const coll = (id) => app.collections.find((x) => x.id === id);
 const collectionWords = (id = app.activeCollection) => id === "all" ? app.words : app.words.filter((w) => w.c.includes(id));
@@ -29,10 +29,10 @@ const due = (w) => w.due || w.s === "reviewing";
 const needsPractice = (w) => w.needsPractice === true || (w.needsPractice !== false && w.s !== "mastered");
 const practiceWords = (id = app.activeCollection) => collectionWords(id).filter(needsPractice);
 const statusColor = (s) => ({ new: "#638dff", learning: "#a66bef", reviewing: "#eebc63", mastered: "#58ca89" })[s];
-function workspaceState() { return { words: app.words, collections: app.collections, flashcardSets: app.flashcardSets, readingLab: app.readingLab, streak: app.streak, accuracy: app.accuracy, theme: app.theme }; }
+function workspaceState() { return { words: app.words, collections: app.collections, flashcardSets: app.flashcardSets, cardSortOrder: app.cardSortOrder, readingLab: app.readingLab, streak: app.streak, accuracy: app.accuracy, theme: app.theme }; }
 function applyWorkspace(state) {
   if (!state || !Array.isArray(state.words) || !Array.isArray(state.collections)) return false;
-  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, flashcardSets: Array.isArray(state.flashcardSets) ? state.flashcardSets : [], readingLab: state.readingLab && typeof state.readingLab === "object" ? state.readingLab : null, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, theme: state.theme === "light" ? "light" : "dark", activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
+  Object.assign(app, { ...freshWorkspace(), words: state.words, collections: state.collections, flashcardSets: Array.isArray(state.flashcardSets) ? state.flashcardSets : [], cardSortOrder: ["az", "za", "random"].includes(state.cardSortOrder) ? state.cardSortOrder : "az", readingLab: state.readingLab && typeof state.readingLab === "object" ? state.readingLab : null, streak: Number(state.streak) || 0, accuracy: Number(state.accuracy) || 0, theme: state.theme === "light" ? "light" : "dark", activeCollection: "all", activeStatus: "all", query: "", starredOnly: false, showAll: false });
   return true;
 }
 function resetWorkspace() { applyWorkspace(freshWorkspace()); }
@@ -198,7 +198,7 @@ function setMobileNavigation(open) {
   if (menuButton) menuButton.setAttribute("aria-expanded", String(open));
 }
 function closeMobileNavigation() { setMobileNavigation(false); }
-function close() { root.innerHTML = ""; session = test = cardDeck = null; window.LexoraFlashcards?.clearSession?.(); window.LexoraReadingLab?.clearSession?.(); }
+function close() { window.clearTimeout(cardAdvanceTimer); cardAdvanceTimer = null; root.innerHTML = ""; session = test = cardDeck = null; window.LexoraFlashcards?.clearSession?.(); window.LexoraReadingLab?.clearSession?.(); }
 
 function taskVariants(w) {
   if (Array.isArray(w.tasks) && w.tasks.length) return w.tasks.filter((task) => task?.prompt && task?.options?.length >= 2);
@@ -232,18 +232,63 @@ function startSession(kind = "daily", providedWords) {
 }
 function beginDailySession() { const count = document.querySelector("#daily-count")?.value || "all", words = practiceWords(), chosen = count === "all" ? words : words.slice(0, Number(count)); startSession("daily", chosen); }
 function startReview() { startSession("review", practiceWords()); }
-function startCards() { const words = collectionWords(); if (!words.length) return notice("Add a word before opening cards."); cardDeck = { queue: shuffled(words), index: 0, revealed: false, known: 0, unknown: 0, unknownIds: [] }; flashcardView(); }
+const cardAlphabet = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+function orderedCardWords(words) {
+  if (app.cardSortOrder === "random") return shuffled([...words]);
+  const direction = app.cardSortOrder === "za" ? -1 : 1;
+  return [...words].sort((left, right) => direction * cardAlphabet.compare(String(left.w || ""), String(right.w || "")) || String(left.id).localeCompare(String(right.id)));
+}
+function startCards() {
+  const words = collectionWords(); if (!words.length) return notice("Add a word before opening cards.");
+  window.clearTimeout(cardAdvanceTimer); cardAdvanceTimer = null;
+  cardDeck = { queue: orderedCardWords(words), index: 0, revealed: false, known: 0, unknown: 0, unknownIds: [], transitioning: false };
+  flashcardView();
+}
 function flashcardView() {
   const word = cardDeck.queue[cardDeck.index], progress = Math.round(cardDeck.index / cardDeck.queue.length * 100);
-  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal session-modal card-modal"><div class="session-top"><span class="session-label">CARD SORT · ${cardDeck.index + 1} OF ${cardDeck.queue.length}</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress"><i style="width:${progress}%"></i></div><div class="session-body"><span class="step-tag">BUILD YOUR REVIEW QUEUE</span><button class="flashcard ${cardDeck.revealed ? "revealed" : ""}" data-action="reveal-card" aria-label="${cardDeck.revealed ? "Card answer revealed" : "Reveal answer"}"><span class="flashcard-side flashcard-front"><small>WORD</small><strong>${esc(word.w)}</strong><em>${esc(word.p)}</em><b>${cardDeck.revealed ? "Tap to hide answer" : "Tap to reveal meaning"}</b></span><span class="flashcard-side flashcard-back"><small>MEANING</small><strong>${esc(word.d)}</strong><em>${esc(word.e)}</em></span></button><p class="card-help">After revealing the answer, decide whether this word should return in your practice queue.</p><div class="card-rating"><button class="card-rate unknown" data-action="rate-card" data-id="unknown" ${cardDeck.revealed ? "" : "disabled"}><span>↻</span><b>I don’t know it</b><small>Keep it for review</small></button><button class="card-rate known" data-action="rate-card" data-id="known" ${cardDeck.revealed ? "" : "disabled"}><span>✓</span><b>I know it</b><small>Remove from review</small></button></div></div></section></div>`;
+  root.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><section class="modal session-modal card-modal"><div class="session-top"><span class="session-label">CARD SORT · ${cardDeck.index + 1} OF ${cardDeck.queue.length}</span><button class="icon-button session-close" data-action="close" aria-label="Close">×</button></div><div class="session-progress"><i style="width:${progress}%"></i></div><div class="session-body"><span class="step-tag">BUILD YOUR REVIEW QUEUE</span><div class="flashcard-sort-row scan-card-sort-row"><label for="scan-card-sort-order">CARD ORDER</label><select id="scan-card-sort-order" aria-label="Card order"><option value="az" ${app.cardSortOrder === "az" ? "selected" : ""}>A–Z</option><option value="za" ${app.cardSortOrder === "za" ? "selected" : ""}>Z–A</option><option value="random" ${app.cardSortOrder === "random" ? "selected" : ""}>Random</option></select></div><button class="flashcard" data-action="reveal-card" aria-label="Reveal answer"><span class="flashcard-side flashcard-front"><small>WORD</small><strong>${esc(word.w)}</strong><em>${esc(word.p || "")}</em><b>Tap to reveal meaning</b></span><span class="flashcard-side flashcard-back"><small>MEANING</small><strong>${esc(word.d)}</strong><em class="scan-card-example" ${word.e ? "" : "hidden"}>${esc(word.e || "")}</em><span class="scan-card-translation" ${word.tr ? "" : "hidden"}><small>RU</small><span>${esc(word.tr || "")}</span></span></span></button><p class="card-help">After revealing the answer, decide whether this word should return in your practice queue.</p><div class="card-rating"><button class="card-rate unknown" data-action="rate-card" data-id="unknown" disabled><span>↻</span><b>I don’t know it</b><small>Keep it for review</small></button><button class="card-rate known" data-action="rate-card" data-id="known" disabled><span>✓</span><b>I know it</b><small>Remove from review</small></button></div></div></section></div>`;
+}
+function updateCardView() {
+  if (!cardDeck) return;
+  const modal = root.querySelector(".card-modal"), word = cardDeck.queue[cardDeck.index];
+  if (!modal || !word) return;
+  const card = modal.querySelector(".flashcard"), example = card.querySelector(".scan-card-example"), translation = card.querySelector(".scan-card-translation");
+  modal.querySelector(".session-label").textContent = `CARD SORT · ${cardDeck.index + 1} OF ${cardDeck.queue.length}`;
+  modal.querySelector(".session-progress i").style.width = `${Math.round(cardDeck.index / cardDeck.queue.length * 100)}%`;
+  card.querySelector(".flashcard-front strong").textContent = word.w;
+  card.querySelector(".flashcard-front em").textContent = word.p || "";
+  card.querySelector(".flashcard-back strong").textContent = word.d;
+  example.textContent = word.e || ""; example.hidden = !example.textContent;
+  translation.querySelector("span").textContent = word.tr || ""; translation.hidden = !word.tr;
+  card.classList.toggle("revealed", cardDeck.revealed);
+  card.setAttribute("aria-label", cardDeck.revealed ? "Hide answer" : "Reveal answer");
+  card.querySelector(".flashcard-front b").textContent = cardDeck.revealed ? "Tap to hide answer" : "Tap to reveal meaning";
+  modal.querySelectorAll(".card-rating button").forEach((button) => { button.disabled = !cardDeck.revealed; });
+}
+function flipCard() { if (!cardDeck || cardDeck.transitioning) return; cardDeck.revealed = !cardDeck.revealed; updateCardView(); }
+function setCardSortOrder(order) {
+  if (!cardDeck || !["az", "za", "random"].includes(order)) return;
+  app.cardSortOrder = order; save();
+  cardDeck.queue = [...cardDeck.queue.slice(0, cardDeck.index), ...orderedCardWords(cardDeck.queue.slice(cardDeck.index))];
+  cardDeck.revealed = false; updateCardView();
 }
 function rateCard(result) {
+  if (!cardDeck || !cardDeck.revealed || cardDeck.transitioning || !["known", "unknown"].includes(result)) return;
   const word = cardDeck.queue[cardDeck.index], known = result === "known";
   word.needsPractice = !known; word.due = !known; word.hard = !known;
   word.s = known ? "mastered" : "reviewing"; word.m = known ? Math.max(85, word.m) : Math.min(50, word.m);
   if (known) cardDeck.known++; else { cardDeck.unknown++; cardDeck.unknownIds.push(word.id); }
   save(); cardDeck.index++; cardDeck.revealed = false;
-  if (cardDeck.index >= cardDeck.queue.length) return cardResult(); flashcardView();
+  if (cardDeck.index >= cardDeck.queue.length) return cardResult();
+  const deck = cardDeck, card = root.querySelector(".card-modal .flashcard");
+  if (!card) return;
+  deck.transitioning = true; card.classList.add("changing");
+  cardAdvanceTimer = window.setTimeout(() => {
+    cardAdvanceTimer = null;
+    if (cardDeck !== deck) return;
+    deck.transitioning = false; updateCardView();
+    window.requestAnimationFrame(() => card.classList.remove("changing"));
+  }, 160);
 }
 function cardResult() {
   const ids = cardDeck.unknownIds, unknown = ids.length;
@@ -365,8 +410,8 @@ function deleteCollection(id) {
   app.activeCollection = "all"; app.showAll = false; save(); render(); close();
   notice(`Removed “${collection.name}”${removeExclusive && exclusiveIds.size ? ` and ${exclusiveIds.size} exclusive ${exclusiveIds.size === 1 ? "word" : "words"}` : ""}.`);
 }
-function wordModal(id) { const w=app.words.find((x)=>x.id===id), editing=!!w; root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">${editing?"WORD DETAILS":"ADD A WORD"}</p><h2>${editing?esc(w.w):"Build your library."}</h2><div class="config-grid"><label><span class="field-label">WORD</span><input id="editor-word" value="${esc(w?.w||"")}" placeholder="e.g. tenacious"></label><label><span class="field-label">PART OF SPEECH</span><select id="editor-pos">${["adjective","noun","verb","adverb"].map((x)=>`<option ${w?.pos===x?"selected":""}>${x}</option>`).join("")}</select></label></div><label><span class="field-label">SIMPLE DEFINITION</span><input id="editor-definition" value="${esc(w?.d||"")}" placeholder="What does it mean in plain English?"></label><label><span class="field-label">EXAMPLE SENTENCE</span><textarea class="use-textarea" id="editor-example" placeholder="Use it in a real situation…">${esc(w?.e||"")}</textarea></label><span class="field-label">IN COLLECTIONS</span><div class="check-grid">${app.collections.map((c)=>`<label class="check-item"><input type="checkbox" value="${c.id}" ${w?.c.includes(c.id)?"checked":""}> ${esc(c.name)}</label>`).join("")}</div><div class="modal-footer">${editing?`<button class="danger-button" data-action="delete" data-id="${w.id}">Remove word</button>`:`<span class="subtle-note">You can edit details later.</span>`}<button class="modal-cta" data-action="save-word" data-id="${w?.id||""}">${editing?"Save changes":"Add word"}</button></div></div></section></div>`; }
-function saveWord(id) { const w=document.querySelector("#editor-word").value.trim().toLowerCase(),d=document.querySelector("#editor-definition").value.trim(),e=document.querySelector("#editor-example").value.trim(),pos=document.querySelector("#editor-pos").value,c=[...document.querySelectorAll(".check-grid input:checked")].map(x=>x.value); if(!w||!d||!c.length)return notice("Add a word, its meaning, and at least one collection."); const data={w,d,e,pos,c}; if(id)Object.assign(app.words.find(x=>x.id===id),data);else app.words.unshift({id:`${w}-${Date.now()}`,...data,p:"/add pronunciation/",tr:"",r:[],s:"new",m:0,star:false,hard:false,due:true,rec:[e||`The word ${w} appeared in the article.`,`What does ${w} most likely mean?`,[d,"A familiar routine","A sudden change","A source of doubt"]],ctx:[e||`The writer used ${w} in a discussion.`,`What should a reader do next?`,["Use surrounding context","Ignore the word","Assume no effect","Choose randomly"]],fill:[`The writer chose the word _____.`,[w,"ordinary","unclear","limited"]]});save();render();close();notice(`“${w}” ${id?"was updated":"was added to your library"}.`); }
+function wordModal(id) { const w=app.words.find((x)=>x.id===id), editing=!!w; root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true"><section class="modal"><button class="icon-button modal-close" data-action="close">×</button><div class="modal-intro"><p class="eyebrow">${editing?"WORD DETAILS":"ADD A WORD"}</p><h2>${editing?esc(w.w):"Build your library."}</h2><div class="config-grid"><label><span class="field-label">WORD</span><input id="editor-word" value="${esc(w?.w||"")}" placeholder="e.g. tenacious"></label><label><span class="field-label">PART OF SPEECH</span><select id="editor-pos">${["adjective","noun","verb","adverb"].map((x)=>`<option ${w?.pos===x?"selected":""}>${x}</option>`).join("")}</select></label></div><label><span class="field-label">SIMPLE DEFINITION</span><input id="editor-definition" value="${esc(w?.d||"")}" placeholder="What does it mean in plain English?"></label><label><span class="field-label">EXAMPLE SENTENCE</span><textarea class="use-textarea" id="editor-example" placeholder="Use it in a real situation…">${esc(w?.e||"")}</textarea></label><label><span class="field-label">RUSSIAN TRANSLATION · OPTIONAL</span><input id="editor-translation" value="${esc(w?.tr||"")}" placeholder="e.g. тщательный"></label><span class="field-label">IN COLLECTIONS</span><div class="check-grid">${app.collections.map((c)=>`<label class="check-item"><input type="checkbox" value="${c.id}" ${w?.c.includes(c.id)?"checked":""}> ${esc(c.name)}</label>`).join("")}</div><div class="modal-footer">${editing?`<button class="danger-button" data-action="delete" data-id="${w.id}">Remove word</button>`:`<span class="subtle-note">You can edit details later.</span>`}<button class="modal-cta" data-action="save-word" data-id="${w?.id||""}">${editing?"Save changes":"Add word"}</button></div></div></section></div>`; }
+function saveWord(id) { const w=document.querySelector("#editor-word").value.trim().toLowerCase(),d=document.querySelector("#editor-definition").value.trim(),e=document.querySelector("#editor-example").value.trim(),tr=document.querySelector("#editor-translation").value.trim(),pos=document.querySelector("#editor-pos").value,c=[...document.querySelectorAll(".check-grid input:checked")].map(x=>x.value); if(!w||!d||!c.length)return notice("Add a word, its meaning, and at least one collection."); const data={w,d,e,tr,pos,c}; if(id)Object.assign(app.words.find(x=>x.id===id),data);else app.words.unshift({id:`${w}-${Date.now()}`,...data,p:"/add pronunciation/",r:[],s:"new",m:0,star:false,hard:false,due:true,rec:[e||`The word ${w} appeared in the article.`,`What does ${w} most likely mean?`,[d,"A familiar routine","A sudden change","A source of doubt"]],ctx:[e||`The writer used ${w} in a discussion.`,`What should a reader do next?`,["Use surrounding context","Ignore the word","Assume no effect","Choose randomly"]],fill:[`The writer chose the word _____.`,[w,"ordinary","unclear","limited"]]});save();render();close();notice(`“${w}” ${id?"was updated":"was added to your library"}.`); }
 
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-action]"); if (!t) return;
@@ -376,7 +421,7 @@ document.addEventListener("click", (e) => {
   if (a === "review") startReview();
   if (a === "scan-cards") startCards();
   if (a === "begin-daily") beginDailySession();
-  if (a === "reveal-card") { cardDeck.revealed = !cardDeck.revealed; flashcardView(); }
+  if (a === "reveal-card") flipCard();
   if (a === "rate-card") rateCard(id);
   if (a === "practice-card-unknown") startSession("review", app.words.filter((word) => cardDeck.unknownIds.includes(word.id)));
   if (a === "test") testConfig();
@@ -425,7 +470,10 @@ document.addEventListener("click", (event) => {
   if (navigationItem && window.matchMedia("(max-width: 760px)").matches) closeMobileNavigation();
 });
 document.addEventListener("click",(e)=>{const t=e.target.closest(".filter-tab");if(!t)return;app.activeStatus=t.dataset.status;app.showAll=false;document.querySelectorAll(".filter-tab").forEach(x=>x.classList.toggle("active",x===t));renderWords()});
-document.addEventListener("change", (e) => { if (e.target.matches("#practice-selection-list input[type=checkbox]")) updatePracticeSelectionCount(); });
+document.addEventListener("change", (e) => {
+  if (e.target.matches("#practice-selection-list input[type=checkbox]")) updatePracticeSelectionCount();
+  if (e.target.id === "scan-card-sort-order") setCardSortOrder(e.target.value);
+});
 document.querySelector("#word-search").addEventListener("input",(e)=>{app.query=e.target.value;app.showAll=false;renderWords()});
 document.querySelector("#collection-filter").addEventListener("change",(e)=>{app.activeCollection=e.target.value;app.showAll=false;render()});
 document.addEventListener("keydown",(e)=>{if(e.key!=="Escape")return;if(document.querySelector(".sidebar")?.classList.contains("open"))return closeMobileNavigation();if(root.innerHTML)close()});
